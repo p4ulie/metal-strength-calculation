@@ -133,7 +133,7 @@ def test_bad_roof_geometry_is_rejected():
         pitched_roof(span=0.0, length=10.0, pitch_deg=20.0)
     with pytest.raises(ValueError, match="pitch"):
         pitched_roof(span=10.0, length=10.0, pitch_deg=70.0)
-    with pytest.raises(ValueError, match="snow_case"):
+    with pytest.raises(ValueError, match="snow case"):
         pitched_roof(span=10.0, length=10.0, pitch_deg=20.0, snow_case="blizzard")
 
 

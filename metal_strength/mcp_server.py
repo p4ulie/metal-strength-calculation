@@ -14,8 +14,9 @@ from typing import Literal
 from mcp.server.fastmcp import FastMCP
 from pydantic import BaseModel, Field
 
-from . import bom, design, ec3, loads, viz
-from .model import StructureSpec, build, pitched_roof, single_beam
+from . import bom, design, ec3, loads, shapes, viz
+from .model import StructureSpec, build, single_beam
+from .model import roof as build_roof
 from .sections import get_section, list_sections
 
 mcp = FastMCP("metal-strength")
@@ -87,6 +88,8 @@ class StructureVerdict(BaseModel):
     members_checked: int
     worst_members: list[MemberVerdict]
     charts: list[str] = Field(default_factory=list)
+    shape: str = ""
+    mu_approximate: bool = False
     disclaimer: str = DISCLAIMER
 
 
@@ -302,7 +305,8 @@ def check_rod_buckling(
 @mcp.tool(
     name="check_roof",
     description=(
-        "Build and check a complete 3D pitched steel roof under snow: portal frames "
+        "Build and check a complete 3D steel roof under snow, in any of the shapes "
+        "list_shapes reports: portal frames "
         "at spacing with purlins between them, solved by 3D frame FEM and verified "
         "member by member against EN 1993-1-1. This is the tool for 'will my roof "
         "hold 1 metre of snow'. Give the snow either as a depth plus state, or "
@@ -324,7 +328,10 @@ def check_roof(
     column: str = "HEB200",
     purlin: str = "SHS100x100x5",
     grade: Literal["S235", "S275", "S355", "S420", "S460"] = "S235",
-    case: Literal["balanced", "drift_left", "drift_right"] = "balanced",
+    shape: Literal["flat", "monopitch", "duopitch", "mansard", "gambrel",
+                   "sawtooth", "multispan"] = "duopitch",
+    case: Literal["balanced", "drift_left", "drift_right",
+                  "valley_drift"] = "balanced",
     charts: bool = False,
 ) -> StructureVerdict:
     if snow_kn_m2 is None:
@@ -333,8 +340,8 @@ def check_roof(
         sk = loads.snow_from_depth(snow_depth_m, snow_state)
         snow_kn_m2 = loads.roof_snow_load(sk, pitch_deg)[0].left
 
-    roof = pitched_roof(
-        span=span_m, length=length_m, pitch_deg=pitch_deg,
+    roof = build_roof(
+        span=span_m, length=length_m, pitch_deg=pitch_deg, shape=shape,
         eaves_height=eaves_height_m, frame_spacing=frame_spacing_m,
         purlin_spacing=purlin_spacing_m, rafter=rafter, column=column,
         purlin=purlin, grade=grade, snow_kn_m2=snow_kn_m2, snow_case=case,
@@ -348,7 +355,7 @@ def check_roof(
     paths: list[str] = []
     if charts:
         CHARTS.mkdir(parents=True, exist_ok=True)
-        stem = f"roof_{span_m:g}x{length_m:g}_{case}"
+        stem = f"roof_{shape}_{span_m:g}x{length_m:g}_{case}"
         paths = [
             str(viz.utilisation_3d(roof, checks, CHARTS / f"{stem}_utilisation.png")),
             str(viz.utilisation_bars(checks, CHARTS / f"{stem}_ranking.png")),
@@ -367,7 +374,34 @@ def check_roof(
         members_checked=len(checks),
         worst_members=[_verdict(c) for c in ranked[:5]],
         charts=paths,
+        shape=shape,
+        mu_approximate=roof.profile.mu_is_approximate if roof.profile else False,
     )
+
+
+@mcp.tool(
+    name="list_shapes",
+    description=(
+        "List the roof profile shapes check_roof can build, with the EN 1991-1-3 "
+        "snow arrangements that apply to each and whether its shape coefficients "
+        "are approximate. Call this before check_roof when the roof is not a "
+        "plain duopitch."
+    ),
+)
+def list_shapes_tool() -> dict:
+    return {
+        "shapes": [
+            {
+                "shape": name,
+                "description": shapes.DESCRIPTIONS[name],
+                "snow_cases": list(loads.ARRANGEMENTS[name]),
+                "mu_approximate": name in shapes.APPROXIMATE_MU,
+            }
+            for name in shapes.SHAPES
+        ],
+        "note": ("Hipped, pyramidal and conical roofs are not supported -- they are "
+                 "not a constant profile extruded along the length."),
+    }
 
 
 @mcp.tool(
@@ -561,7 +595,7 @@ def material_list(
     country: Literal["SK", "CZ"] = "SK",
     waste_percent: float = 0.0,
 ) -> MaterialList:
-    con = pitched_roof(
+    con = build_roof(
         span=span_m, length=length_m, pitch_deg=pitch_deg,
         eaves_height=eaves_height_m, frame_spacing=frame_spacing_m,
         purlin_spacing=purlin_spacing_m, rafter=rafter, column=column,
@@ -581,10 +615,17 @@ def material_list(
         "image path. Useful for explaining why an unbalanced drift case can govern."
     ),
 )
-def render_snow_cases(sk_kn_m2: float, pitch_deg: float) -> dict:
+def render_snow_cases(
+    sk_kn_m2: float,
+    pitch_deg: float,
+    shape: Literal["flat", "monopitch", "duopitch", "mansard", "gambrel",
+                   "sawtooth", "multispan"] = "duopitch",
+) -> dict:
     CHARTS.mkdir(parents=True, exist_ok=True)
-    p = viz.snow_cases(sk_kn_m2, pitch_deg, CHARTS / f"snow_{sk_kn_m2:g}_{pitch_deg:g}.png")
-    return {"path": str(p)}
+    p = viz.snow_cases(sk_kn_m2, pitch_deg,
+                       CHARTS / f"snow_{shape}_{sk_kn_m2:g}_{pitch_deg:g}.png",
+                       shape=shape)
+    return {"path": str(p), "mu_approximate": shape in shapes.APPROXIMATE_MU}
 
 
 def main() -> None:

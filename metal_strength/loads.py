@@ -9,6 +9,8 @@ import math
 from dataclasses import dataclass
 from enum import StrEnum
 
+from . import shapes
+
 # EN 1991-1-3 Annex E, bulk weight density of snow [kN/m^3].
 # This is what answers "how much is 1 m of snow" -- a 4x spread by state.
 SNOW_DENSITY = {
@@ -44,22 +46,48 @@ class RoofType(StrEnum):
     DUOPITCH = "duopitch"
 
 
+# Which EN 1991-1-3 arrangements apply to each profile shape. Shapes with no
+# ridge have nothing for the wind to redistribute across, so they get one case;
+# shapes with valleys get accumulation instead of a ridge drift.
+ARRANGEMENTS: dict[str, tuple[str, ...]] = {
+    "flat": ("balanced",),
+    "monopitch": ("balanced",),
+    "duopitch": ("balanced", "drift_left", "drift_right"),
+    "mansard": ("balanced", "drift_left", "drift_right"),
+    "gambrel": ("balanced", "drift_left", "drift_right"),
+    "custom": ("balanced", "drift_left", "drift_right"),
+    "sawtooth": ("balanced", "valley_drift"),
+    "multispan": ("balanced", "valley_drift"),
+}
+
+
 @dataclass(frozen=True)
 class SnowCase:
     """One EN 1991-1-3 load arrangement.
 
-    ``left`` and ``right`` are the design snow loads on each slope in kN/m^2,
+    ``values`` is the design snow load on each slope in kN/m^2, left to right,
     measured on the *horizontal projection* of the roof -- which is how the
-    Eurocode defines it and how you must apply it to a rafter.
+    Eurocode defines it and how you must apply it to a rafter. A shape with one
+    slope has one value, a mansard has four, a three-bay sawtooth has six.
+
+    ``left`` and ``right`` are the first and last, which is all a two-slope roof
+    ever had.
     """
 
     name: str
-    left: float
-    right: float
+    values: tuple[float, ...]
+
+    @property
+    def left(self) -> float:
+        return self.values[0]
+
+    @property
+    def right(self) -> float:
+        return self.values[-1]
 
     @property
     def governing(self) -> float:
-        return max(self.left, self.right)
+        return max(self.values)
 
 
 def snow_from_depth(depth_m: float, state: str = "settled") -> float:
@@ -120,25 +148,81 @@ def roof_snow_load(
     governing arrangement differs from member to member, so the caller must run
     all of them and envelope the results.
     """
+    frame = shapes.frame(str(roof_type), span=10.0, pitch_deg=abs(pitch_deg),
+                         eaves_height=3.0)
+    return snow_arrangements(frame, sk, exposure, Ct, snow_guards)
+
+
+def case_factors(frame: "shapes.Frame", case: str,
+                 snow_guards: bool = False) -> tuple[float, ...]:
+    """Per-segment multipliers on the balanced snow load, aligned to ``frame.segments``.
+
+    Columns get 0.0 -- nothing lands on them. Everything the Eurocode says about
+    a shape's arrangements is expressed here as a factor on mu_1, so the model
+    only ever multiplies.
+    """
+    allowed = ARRANGEMENTS.get(frame.shape, ARRANGEMENTS["custom"])
+    if case not in allowed:
+        raise ValueError(
+            f"snow case for a {frame.shape} roof must be one of {list(allowed)}, "
+            f"got {case!r}")
+
+    factors = []
+    apex_x = max(frame.points, key=lambda pt: pt[1])[0]
+    valley_x = {frame.points[i][0] for i in frame.valleys}
+    # The caller's snow load was worked out at the nominal pitch, so a slope of
+    # a different pitch is scaled by the ratio of the two shape coefficients.
+    # A mansard's 60deg lower slope and a sawtooth's steep face come out at
+    # zero, which is right: snow slides off them (EN 1991-1-3 Table 5.2).
+    reference = mu1(frame.pitch_deg, snow_guards)
+
+    for seg in frame.segments:
+        if seg.role != "rafter":
+            factors.append(0.0)
+            continue
+        ratio = mu1(seg.pitch_deg, snow_guards) / reference if reference else 0.0
+        if case == "balanced":
+            factors.append(ratio)
+        elif case in ("drift_left", "drift_right"):
+            # EN 1991-1-3 Figure 5.3: the wind strips one side to half.
+            mid = (seg.x0 + seg.x1) / 2
+            windward = mid < apex_x if case == "drift_left" else mid > apex_x
+            factors.append(ratio if windward else 0.5 * ratio)
+        else:  # valley_drift
+            # EN 1991-1-3 5.3.4: snow accumulates in the valley, mu_2 being the
+            # sum of the mu_1 of the two slopes draining into it.
+            # ponytail: applied over the whole segment rather than the drift
+            # length l_s, which is conservative. Narrow it if it ever governs a
+            # design uneconomically.
+            touches_valley = seg.x0 in valley_x or seg.x1 in valley_x
+            factors.append(2.0 * ratio if touches_valley else ratio)
+    return tuple(factors)
+
+
+def snow_arrangements(
+    frame: "shapes.Frame",
+    sk: float,
+    exposure: str = "normal",
+    Ct: float = 1.0,
+    snow_guards: bool = False,
+) -> list[SnowCase]:
+    """Every EN 1991-1-3 arrangement for a frame profile, one value per slope."""
     if exposure not in EXPOSURE:
         raise ValueError(f"exposure must be one of {sorted(EXPOSURE)}, got {exposure!r}")
     if sk < 0:
         raise ValueError("sk cannot be negative")
     Ce = EXPOSURE[exposure]
-    m = mu1(pitch_deg, snow_guards)
-    full = m * Ce * Ct * sk
-    half = 0.5 * full
 
-    if RoofType(roof_type) is RoofType.MONOPITCH:
-        return [SnowCase("balanced", full, full)]
-
-    # EN 1991-1-3 Figure 5.3: balanced, plus two drift cases with one slope at
-    # half load (wind has redistributed the snow across the ridge).
-    return [
-        SnowCase("balanced", full, full),
-        SnowCase("drift_left", full, half),
-        SnowCase("drift_right", half, full),
-    ]
+    # The reference load, at the pitch the caller quoted. case_factors() carries
+    # each slope's own mu relative to it, so this stays a single number.
+    reference = mu1(frame.pitch_deg, snow_guards) * Ce * Ct * sk
+    cases = []
+    for name in ARRANGEMENTS.get(frame.shape, ARRANGEMENTS["custom"]):
+        rafter_factors = [f for f, seg in
+                          zip(case_factors(frame, name, snow_guards), frame.segments)
+                          if seg.role == "rafter"]
+        cases.append(SnowCase(name, tuple(reference * f for f in rafter_factors)))
+    return cases
 
 
 def slope_udl(area_load: float, tributary_width_m: float, pitch_deg: float) -> float:

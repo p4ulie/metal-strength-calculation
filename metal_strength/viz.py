@@ -262,32 +262,40 @@ def utilisation_bars(checks: list[ec3.MemberResult], path: str | Path,
     return p
 
 
-def snow_cases(sk: float, pitch_deg: float, path: str | Path) -> Path:
+def snow_cases(sk: float, pitch_deg: float, path: str | Path,
+               shape: str = "duopitch") -> Path:
     """The EN 1991-1-3 load arrangements, drawn on the roof profile."""
-    from .loads import roof_snow_load
+    from . import loads, shapes
 
-    cases = roof_snow_load(sk, pitch_deg)
+    fr = shapes.frame(shape, span=1.0, pitch_deg=abs(pitch_deg), eaves_height=1.0)
+    cases = loads.snow_arrangements(fr, sk)
+    outline = [(x, z - 1.0) for x, z in fr.points]  # z from the eaves up
+    rafters = [(s.x0, s.z0 - 1.0, s.x1, s.z1 - 1.0) for s in fr.rafters]
+
     fig, axes = plt.subplots(1, len(cases), figsize=(4 * len(cases), 3.2), sharey=True)
     axes = np.atleast_1d(axes)
-    rise = 0.5 * np.tan(np.radians(pitch_deg))
-    peak = max(c.governing for c in cases) or 1.0
+    peak = max((c.governing for c in cases), default=0.0) or 1.0
+    top = max(z for _, z in outline)
 
     for ax, case in zip(axes, cases):
-        ax.plot([0, 0.5, 1.0], [0, rise, 0], color="#37474f", lw=2.5)
-        for x0, x1, s in ((0.0, 0.5, case.left), (0.5, 1.0, case.right)):
+        ax.plot([x for x, _ in outline], [z for _, z in outline],
+                color="#37474f", lw=2.5)
+        for (x0, z0, x1, z1), s in zip(rafters, case.values):
             h = 0.35 * s / peak
-            zs = [rise * (x0 * 2 if x0 < 0.5 else 2 - 2 * x0),
-                  rise * (x1 * 2 if x1 < 0.5 else 2 - 2 * x1)]
-            ax.fill_between([x0, x1], zs, [z + h for z in zs],
+            ax.fill_between([x0, x1], [z0, z1], [z0 + h, z1 + h],
                             color="#90caf9", edgecolor="#1565c0")
-            ax.text((x0 + x1) / 2, max(zs) + h + 0.03, f"{s:.2f}",
-                    ha="center", fontsize=9)
+            if s > 0:
+                ax.text((x0 + x1) / 2, max(z0, z1) + h + 0.03, f"{s:.2f}",
+                        ha="center", fontsize=8)
         ax.set_title(i18n.snow_term(case.name, LANG), fontsize=10)
         ax.set_xticks([])
-        ax.set_ylim(-0.05, rise + 0.55)
+        ax.set_ylim(-0.05, top + 0.55)
     axes[0].set_ylabel(f"kN/m$^2$ ({_L('to_scale')})")
-    fig.suptitle(f"{_L('snow_arrangements')} -- sk={sk:.2f} kN/m2, "
-                 f"{_L('pitch')} {pitch_deg:.0f}deg")
+    title = (f"{_L('snow_arrangements')} -- {i18n.shape_term(shape, LANG)}, "
+             f"sk={sk:.2f} kN/m2, {_L('pitch')} {pitch_deg:.0f}deg")
+    if fr.mu_is_approximate:
+        title += f"\n{_L('mu_approximate')}"
+    fig.suptitle(title, fontsize=10)
     fig.tight_layout()
     p = _out(path)
     fig.savefig(p, dpi=130)
@@ -372,6 +380,7 @@ def dashboard(
     grade: str = "S235",
     snow_depth: float = 1.0,
     snow_state: str = "wet",
+    shape: str = "duopitch",
     **roof_kwargs,
 ):
     """One window with live controls: scrub the snow, step the sections, re-solve.
@@ -380,15 +389,27 @@ def dashboard(
     ordered by depth, so ``rafter="IPE450"`` steps through the IPE range. Drag
     the 3D panel to orbit it -- mplot3d handles that natively.
 
+    The shape radio switches the profile; ticking "edit profile" hands the
+    deflected-shape panel over to a vertex editor, and dragging a corner rebuilds
+    the frame as a custom shape.
+
     Every distinct combination is solved once and cached, so going back to a
     setting you have already tried is instant.
     """
-    from matplotlib.widgets import RadioButtons, Slider
+    from matplotlib.widgets import CheckButtons, PolygonSelector, RadioButtons, Slider
 
-    from . import loads
-    from .model import pitched_roof
+    from . import loads, shapes
+    from .model import roof as build_roof
 
     states = list(loads.SNOW_DENSITY)
+    eaves_height = roof_kwargs.get("eaves_height", 3.0)
+    # The profile in play: a preset until the editor produces a custom one.
+    current = {"shape": shape, "points": None}
+
+    def profile() -> "shapes.Frame":
+        if current["points"] is not None:
+            return shapes.from_points(current["points"])
+        return shapes.frame(current["shape"], span, pitch_deg, eaves_height)
     ladders = {k: _ladder(v) for k, v in
                (("rafter", rafter), ("column", column), ("purlin", purlin))}
 
@@ -400,14 +421,18 @@ def dashboard(
     cache: dict[tuple, tuple] = {}
 
     def solve(depth: float, state: str, sections: dict[str, str]):
-        key = (round(depth, 2), state, *sections.values())
+        fr = profile()
+        key = (round(depth, 2), state, *sections.values(), fr.shape, fr.points)
         if key not in cache:
             sk = loads.snow_from_depth(key[0], state)
-            snow = loads.roof_snow_load(sk, pitch_deg)[0].left
-            roof = pitched_roof(span=span, length=length, pitch_deg=pitch_deg,
-                                rafter=sections["rafter"], column=sections["column"],
-                                purlin=sections["purlin"], grade=grade,
-                                snow_kn_m2=snow, **roof_kwargs)
+            # The reference load at the profile's nominal pitch; each slope's
+            # own mu is applied inside the model.
+            snow = loads.mu1(fr.pitch_deg) * sk
+            roof = build_roof(span=span, length=length, pitch_deg=pitch_deg,
+                              profile=fr,
+                              rafter=sections["rafter"], column=sections["column"],
+                              purlin=sections["purlin"], grade=grade,
+                              snow_kn_m2=snow, **roof_kwargs)
             results = roof.solve()
             cache[key] = (roof, results, roof.check(results))
         return cache[key]
@@ -424,6 +449,17 @@ def dashboard(
     state_labels = {i18n.snow_term(st, LANG): st for st in states}
     r_state = RadioButtons(ax_state, list(state_labels),
                            active=states.index(snow_state))
+
+    ax_shape = fig.add_axes([0.005, 0.01, 0.11, 0.16])
+    ax_shape.set_title(_L("shape"), fontsize=9)
+    shape_labels = {i18n.shape_term(sh, LANG): sh for sh in shapes.SHAPES}
+    r_shape = RadioButtons(ax_shape, list(shape_labels),
+                           active=list(shapes.SHAPES).index(shape))
+    for label in r_shape.labels:
+        label.set_fontsize(8)
+
+    ax_edit = fig.add_axes([0.125, 0.055, 0.10, 0.055])
+    c_edit = CheckButtons(ax_edit, [_L("edit_profile")], [False])
 
     sliders = {}
     for i, role in enumerate(("rafter", "column", "purlin")):
@@ -442,17 +478,75 @@ def dashboard(
             out[role] = name
         return out
 
-    def redraw(_=None) -> None:
+    # -- the profile editor ---------------------------------------------------
+    # ponytail: the editor borrows the deflected-shape panel rather than adding
+    # a fifth one. _paint() clears its axes, so the two cannot share a redraw.
+    editor = {"selector": None}
+    SNAP = 0.25  # metres
+
+    def editing() -> bool:
+        return bool(c_edit.get_status()[0])
+
+    def on_edit(verts) -> None:
+        """A vertex moved: rebuild the profile, or refuse if it is not a roof."""
+        pts = sorted(((round(x / SNAP) * SNAP, z) for x, z in verts
+                      if z > 1e-6), key=lambda pt: pt[0])
+        try:
+            shapes.validate(pts)
+        except ValueError as exc:
+            fig.suptitle(f"{_L('invalid_profile')}: {exc}", fontsize=11,
+                         color="#c62828")
+            fig.canvas.draw_idle()
+            return
+        current["points"] = pts
+        draw_editor()
+        redraw(keep_editor=True)
+
+    def draw_editor() -> None:
+        ax = axes[1]
+        ax.clear()
+        fr = profile()
+        pts = fr.points
+        ax.plot([x for x, _ in pts], [z for _, z in pts], color="#37474f", lw=2)
+        for seg in fr.segments:
+            if seg.role == "column":
+                ax.plot([seg.x0, seg.x1], [seg.z0, seg.z1], color="#90a4ae", lw=1.5)
+        ax.set_xlim(-1.0, span + 1.0)
+        ax.set_ylim(0.0, fr.apex_height * 1.35)
+        ax.set_aspect("equal")
+        ax.set_title(f"{_L('edit_profile')} -- {i18n.shape_term(fr.shape, LANG)}",
+                     fontsize=10)
+        ax.grid(alpha=0.3)
+        sel = PolygonSelector(ax, on_edit, useblit=False,
+                              props=dict(color="#1565c0", lw=1.5))
+        sel.verts = [(pts[0][0], 0.0), *pts, (pts[-1][0], 0.0)]
+        editor["selector"] = sel
+
+    def redraw(_=None, keep_editor: bool = False) -> None:
         sections = current_sections()
         state = state_labels[r_state.value_selected]
         roof, results, checks = solve(s_depth.val, state, sections)
         worst = _paint(axes, roof, results, checks)
+        if keep_editor or editing():
+            draw_editor()
         defl = roof.deflection(results)
+        warning = f"   |   {_L('mu_approximate')}" if profile().mu_is_approximate else ""
         fig.suptitle(
-            f"{span:.0f} x {length:.0f} {_L('roof_at')} {pitch_deg:.0f}deg, {grade}"
+            f"{i18n.shape_term(profile().shape, LANG)} {span:.0f} x {length:.0f} "
+            f"{_L('roof_at')} {pitch_deg:.0f}deg, {grade}"
             f"   |   {_L('snow')} {s_depth.val:.2f} m, {r_state.value_selected}\n"
-            f"{_headline(roof, checks, defl, worst)}", fontsize=12)
+            f"{_headline(roof, checks, defl, worst)}{warning}", fontsize=11)
         fig.canvas.draw_idle()
+
+    def on_shape(label) -> None:
+        current["shape"] = shape_labels[label]
+        current["points"] = None  # a preset replaces whatever was drawn
+        redraw()
+
+    def on_edit_toggled(_label) -> None:
+        if not editing():
+            editor["selector"] = None
+        redraw()
 
     # Re-solving on every step of a drag would stutter, so while the mouse is
     # down just update the labels and defer the solve to the release. A click
@@ -477,9 +571,13 @@ def dashboard(
     for slider in all_sliders:
         slider.on_changed(on_change)
     r_state.on_clicked(lambda _: redraw())
+    r_shape.on_clicked(on_shape)
+    c_edit.on_clicked(on_edit_toggled)
     fig.canvas.mpl_connect("button_release_event", on_release)
 
     # Keep references alive; matplotlib drops widgets that are only local.
-    fig._ms_widgets = (s_depth, r_state, sliders)
+    fig._ms_widgets = {"depth": s_depth, "state": r_state, "shape": r_shape,
+                       "edit": c_edit, "sections": sliders, "editor": editor,
+                       "profile": profile}
     redraw()
     return fig

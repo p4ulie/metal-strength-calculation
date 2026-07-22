@@ -38,6 +38,21 @@ SNOW_TERMS: dict[str, dict[str, str]] = {
     "balanced": {"en": "balanced", "sk": "rovnomerné", "cs": "rovnoměrné"},
     "drift_left": {"en": "drift_left", "sk": "závej vľavo", "cs": "závěj vlevo"},
     "drift_right": {"en": "drift_right", "sk": "závej vpravo", "cs": "závěj vpravo"},
+    "valley_drift": {"en": "valley_drift", "sk": "závej v úžľabí",
+                     "cs": "závěj v úžlabí"},
+}
+
+# Roof profile shapes. Keys are the identifiers used on the command line.
+SHAPE_NAMES: dict[str, dict[str, str]] = {
+    "flat": {"en": "flat", "sk": "plochá", "cs": "plochá"},
+    "monopitch": {"en": "monopitch", "sk": "pultová", "cs": "pultová"},
+    "duopitch": {"en": "duopitch", "sk": "sedlová", "cs": "sedlová"},
+    "mansard": {"en": "mansard", "sk": "manzardová", "cs": "mansardová"},
+    "gambrel": {"en": "gambrel", "sk": "manzardová stodolová",
+                "cs": "mansardová stodolová"},
+    "sawtooth": {"en": "sawtooth", "sk": "pílová", "cs": "pilová"},
+    "multispan": {"en": "multispan", "sk": "viacloďová", "cs": "vícelodní"},
+    "custom": {"en": "custom", "sk": "vlastná", "cs": "vlastní"},
 }
 
 MESSAGES: dict[str, dict[str, str]] = {
@@ -119,6 +134,22 @@ MESSAGES: dict[str, dict[str, str]] = {
     "roof_at": {"en": "m roof at", "sk": "m strecha so sklonom",
                 "cs": "m střecha se sklonem"},
     "to_scale": {"en": "to scale", "sk": "v mierke", "cs": "v měřítku"},
+    "mu_approximate": {
+        "en": "APPROXIMATE SNOW COEFFICIENTS - EN 1991-1-3 gives no rule for "
+              "this shape, so mu comes from each slope's own pitch. Have the "
+              "arrangement confirmed before relying on it.",
+        "sk": "PRIBLIŽNÉ SÚČINITELE SNEHU - EN 1991-1-3 pre tento tvar pravidlo "
+              "neuvádza, mu vychádza zo sklonu jednotlivých plôch. Pred použitím "
+              "si zaťaženie nechajte overiť.",
+        "cs": "PŘIBLIŽNÉ SOUČINITELE SNĚHU - EN 1991-1-3 pro tento tvar pravidlo "
+              "neuvádí, mu vychází ze sklonu jednotlivých ploch. Před použitím "
+              "si zatížení nechte ověřit.",
+    },
+    "shape": {"en": "shape", "sk": "tvar", "cs": "tvar"},
+    "edit_profile": {"en": "edit profile", "sk": "upraviť tvar",
+                     "cs": "upravit tvar"},
+    "invalid_profile": {"en": "profile refused", "sk": "neplatný tvar",
+                        "cs": "neplatný tvar"},
     "snow_arrangements": {"en": "EN 1991-1-3 snow arrangements",
                           "sk": "Zaťaženie snehom podľa EN 1991-1-3",
                           "cs": "Zatížení sněhem podle EN 1991-1-3"},
@@ -179,6 +210,11 @@ def translate_tag(tag: str, lang: str = "en") -> str:
     head, _, rest = tag.partition(" ")
     translated = role(head, lang)
     return f"{translated} {rest}".rstrip() if rest else translated
+
+
+def shape_term(name: str, lang: str = "en") -> str:
+    """Display form of a roof shape; unknown names pass through."""
+    return SHAPE_NAMES.get(name, {}).get(lang, name)
 
 
 def snow_term(name: str, lang: str = "en") -> str:

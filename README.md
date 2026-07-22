@@ -29,12 +29,61 @@ uv run python -m metal_strength.cli beam --span 6 --section IPE200 --udl 5 --sho
 | Actions | `loads.py` | EN 1991-1-3 snow, EN 1990 combinations |
 | Analysis | `frame3d.py` | 3D direct stiffness, 6 DOF/node, pure numpy |
 | Design checks | `ec3.py` | EN 1993-1-1 §6.2, §6.3 |
-| Geometry | `model.py` | pitched-roof generator, single beams |
+| Geometry | `shapes.py`, `model.py` | roof profiles, frame generator, single beams |
 | Design | `design.py` | proposes sections that carry a given load |
 | Costing | `bom.py` | material list, indicative prices, VAT |
 | Language | `i18n.py` | report labels in en / sk / cs |
 | Output | `viz.py` | charts as PNGs, one window, or a live dashboard |
-| LLM access | `mcp_server.py` | MCP over stdio, 11 tools |
+| LLM access | `mcp_server.py` | MCP over stdio, 12 tools |
+
+## Roof shapes
+
+`--shape` picks the profile; the frame, the purlins, the columns under every
+valley and the EN 1991-1-3 snow arrangements all follow from it.
+
+| shape | snow arrangements |
+|---|---|
+| `flat` | balanced |
+| `monopitch` | balanced |
+| `duopitch` (default) | balanced, drift left, drift right |
+| `mansard` | balanced, drift left, drift right — mu approximate |
+| `gambrel` | balanced, drift left, drift right — mu approximate |
+| `sawtooth` | balanced, valley drift |
+| `multispan` | balanced, valley drift |
+
+```
+uv run python -m metal_strength.cli roof --span 30 --length 20 --pitch 15 \
+    --shape multispan --case valley_drift --snow-depth 1.0 --snow-state wet
+```
+
+`--pitch` always means the *upper* slope, so a mansard's steep lower slope and a
+sawtooth's return face are set by the shape, not by you. Snow slides off both of
+them: above 60 degrees mu is zero (EN 1991-1-3 Table 5.2), which the model
+applies per slope.
+
+Repeating shapes read `--span` as the total width and divide it into bays as
+near 10 m as they can, each bay getting a column at its valley.
+
+**Not supported**: hipped, pyramidal, conical and domed roofs. Those are not a
+constant profile extruded along the length — the frames stop being identical —
+so they would need a different generator, not another entry in this table.
+
+The Eurocode gives no shape coefficient for a mansard, a gambrel or a
+hand-drawn profile. Those get mu from each slope's own pitch and every report,
+chart and MCP response says so. Have the arrangement confirmed before building
+anything off it.
+
+## Drawing your own profile
+
+In the live dashboard (`--show`), tick **edit profile** and drag the corners:
+the frame rebuilds as a `custom` shape and re-solves on release. Vertices snap
+to 0.25 m, and a profile that cannot be a roof — doubling back, two corners on
+the same vertical, anything on the ground — is refused with the reason, leaving
+the previous one in place.
+
+Which snow arrangement applies is still your call: the shape radio stays live
+and nominates the standard shape mu comes from, and the answer is stamped
+approximate.
 
 ## Design it for me
 
@@ -97,12 +146,14 @@ metal-strength snow     --zone 2 --altitude 400 --region central_east --pitch 20
 metal-strength beam     --span 6 --section IPE200 --udl 5 [--point 20]
                         [--fixity simple|cantilever|fixed|propped] [--restrained]
 metal-strength roof     --span 12 --length 20 --pitch 20 --snow-depth 1.0
+                        [--shape duopitch|monopitch|flat|mansard|gambrel|
+                                 sawtooth|multispan]
                         [--snow-state wet] [--snow 3.2] [--case drift_left]
                         [--rafter IPE450] [--column HEB240] [--purlin SHS140x140x5]
                         [--frame-spacing 5] [--purlin-spacing 1.5] [--eaves-height 3]
                         [--grade S355]
 metal-strength design   --span 12 --length 20 --pitch 20 --snow-depth 1.0
-                        [--target 0.85] [--objective mass|cost]
+                        [--shape multispan] [--target 0.85] [--objective mass|cost]
                         [--rafter-family IPE] [--column-family HEB]
 metal-strength sections IPE300
 metal-strength sections --family HEB
@@ -155,8 +206,9 @@ uv run python tests/smoke_mcp.py                  # exercise every tool
 ```
 
 Tools: `snow_load_from_depth`, `snow_load_eurocode`, `list_sections`,
-`section_properties`, `check_beam`, `check_rod_buckling`, `check_roof`,
-`solve_frame`, `propose_construction`, `material_list`, `render_snow_cases`.
+`list_shapes`, `section_properties`, `check_beam`, `check_rod_buckling`,
+`check_roof`, `solve_frame`, `propose_construction`, `material_list`,
+`render_snow_cases`.
 
 `propose_construction` is the design solver; `material_list` returns the BOM
 with an indicative cost and a `price_note` that must be repeated to the user.

@@ -14,7 +14,30 @@ EXPECTED_TOOLS = {
     "snow_load_from_depth", "snow_load_eurocode", "list_sections",
     "section_properties", "check_beam", "check_rod_buckling", "check_roof",
     "solve_frame", "render_snow_cases", "propose_construction", "material_list",
+    "list_shapes",
 }
+
+
+def test_list_shapes_tool_matches_the_shapes_module():
+    from metal_strength import loads, shapes
+
+    listed = srv.list_shapes_tool()["shapes"]
+    assert [e["shape"] for e in listed] == list(shapes.SHAPES)
+    for entry in listed:
+        assert entry["snow_cases"] == list(loads.ARRANGEMENTS[entry["shape"]])
+        assert entry["description"]
+
+
+def test_check_roof_reports_the_shape_and_flags_approximate_mu():
+    plain = srv.check_roof(span_m=12.0, length_m=15.0, pitch_deg=20.0,
+                           snow_depth_m=0.5, rafter="IPE450", column="HEB240",
+                           purlin="SHS140x140x5")
+    assert plain.shape == "duopitch" and not plain.mu_approximate
+
+    mansard = srv.check_roof(span_m=12.0, length_m=15.0, pitch_deg=20.0,
+                             snow_depth_m=0.5, shape="mansard", rafter="IPE450",
+                             column="HEB240", purlin="SHS140x140x5")
+    assert mansard.shape == "mansard" and mansard.mu_approximate
 
 
 def test_all_tools_registered_with_descriptions():

@@ -11,7 +11,7 @@ from dataclasses import dataclass, field
 
 from pydantic import BaseModel, Field
 
-from . import ec3, frame3d, loads
+from . import ec3, frame3d, loads, shapes
 from .sections import Section, get_section
 
 M_TO_MM = 1000.0
@@ -134,6 +134,8 @@ class Construction:
     lt_lengths: dict[int, float] = field(default_factory=dict)
     snow_case: str = ""
     snow_kn_m2: float = 0.0
+    # The frame profile this was generated from, when it came from one.
+    profile: "shapes.Frame | None" = None
 
     kind: str = "construction"
 
@@ -193,10 +195,12 @@ class Construction:
         return out
 
 
-def pitched_roof(
+def roof(
     span: float,
     length: float,
     pitch_deg: float,
+    shape: str = "duopitch",
+    profile: shapes.Frame | list[tuple[float, float]] | None = None,
     eaves_height: float = 3.0,
     frame_spacing: float = 5.0,
     purlin_spacing: float = 1.5,
@@ -211,52 +215,66 @@ def pitched_roof(
     gamma_G: float = 1.35,
     gamma_Q: float = 1.5,
 ) -> Construction:
-    """Build a duopitch portal-frame roof and load it with snow.
+    """Build a portal-frame roof of any extruded shape and load it with snow.
 
     All lengths in metres, snow in kN/m^2 on the horizontal projection.
 
-    Portal frames sit in the X-Z plane at intervals of ``frame_spacing`` along
-    Y. Purlins run along Y between frames at ``purlin_spacing`` measured up the
-    slope, and carry the snow to the rafters. ``snow_case`` is ``balanced``,
-    ``drift_left`` or ``drift_right`` -- the halved slope of a drift case gets
-    half the load, per EN 1991-1-3 Figure 5.3.
+    Frames sit in the X-Z plane at intervals of ``frame_spacing`` along Y, each
+    following the profile of ``shape`` (or ``profile``, a hand-drawn polyline
+    or a ready-made :class:`~metal_strength.shapes.Frame`). Purlins run along Y
+    between frames at ``purlin_spacing`` measured up the slope, and carry the
+    snow to the rafters.
+
+    ``snow_case`` names an EN 1991-1-3 arrangement; the per-slope multipliers
+    come from :func:`metal_strength.loads.case_factors`, so a drift on a
+    duopitch and an accumulation in a multi-span valley are both just factors
+    applied to the segments they act on.
     """
     if span <= 0 or length <= 0:
         raise ValueError("span and length must be positive")
-    if not 0 <= pitch_deg < 60:
-        raise ValueError("pitch must be between 0 and 60 degrees")
 
-    slope = math.radians(pitch_deg)
-    half = span / 2
-    rise = half * math.tan(slope)
-    slope_len = math.hypot(half, rise)
+    if isinstance(profile, shapes.Frame):
+        frame_profile = profile
+    elif profile is not None:
+        frame_profile = shapes.from_points(profile)
+    else:
+        frame_profile = shapes.frame(shape, span, pitch_deg, eaves_height)
 
+    span = frame_profile.span
+    factors = loads.case_factors(frame_profile, snow_case)
+
+    # -- stations: every distinct (x, z) on the frame, subdivided for purlins --
+    stations: dict[tuple[float, float], int] = {}
+    # (station i, station j, role, length, segment index) for one frame
+    pieces: list[tuple[int, int, str, float, int]] = []
+
+    def station(x: float, z: float) -> int:
+        key = (round(x, 6), round(z, 6))
+        if key not in stations:
+            stations[key] = len(stations)
+        return stations[key]
+
+    for s_index, seg in enumerate(frame_profile.segments):
+        n = max(1, round(seg.length / purlin_spacing)) if seg.role == "rafter" else 1
+        prev = station(seg.x0, seg.z0)
+        for k in range(1, n + 1):
+            t = k / n
+            nxt = station(seg.x0 + (seg.x1 - seg.x0) * t, seg.z0 + (seg.z1 - seg.z0) * t)
+            pieces.append((prev, nxt, seg.role, seg.length / n, s_index))
+            prev = nxt
+
+    coords = {i: xz for xz, i in stations.items()}
     n_bays = max(1, round(length / frame_spacing))
     frame_y = [i * length / n_bays for i in range(n_bays + 1)]
-    n_purlin = max(1, round(slope_len / purlin_spacing))
-    # Positions along one slope, from eaves (0) to apex (1).
-    t = [k / n_purlin for k in range(n_purlin + 1)]
 
     nodes: list[NodeSpec] = []
     index: dict[tuple[int, int], int] = {}  # (frame, station) -> node index
-
-    def add(frame: int, station: int, x: float, y: float, z: float) -> int:
-        nodes.append(NodeSpec(x=x, y=y, z=z))
-        index[(frame, station)] = len(nodes) - 1
-        return len(nodes) - 1
-
-    # Stations along a frame: 0 = left base, 1..n = left slope eaves->apex,
-    # n+1..2n = right slope apex->eaves (apex shared), last = right base.
-    n_left = len(t)  # eaves..apex inclusive
     for f, y in enumerate(frame_y):
-        add(f, 0, 0.0, y, 0.0)  # left base
-        for k, tk in enumerate(t):  # left slope, eaves -> apex
-            add(f, 1 + k, half * tk, y, eaves_height + rise * tk)
-        for k, tk in enumerate(t[1:], start=1):  # right slope, apex -> eaves
-            add(f, n_left + k, half + half * tk, y, eaves_height + rise * (1 - tk))
-        add(f, n_left + len(t), span, y, 0.0)  # right base
+        for st in range(len(stations)):
+            x, z = coords[st]
+            nodes.append(NodeSpec(x=x, y=y, z=z))
+            index[(f, st)] = len(nodes) - 1
 
-    last_station = n_left + len(t)
     members: list[MemberSpec] = []
     lt: dict[int, float] = {}
 
@@ -267,56 +285,55 @@ def pitched_roof(
             lt[e] = lt_len * M_TO_MM
         return e
 
+    # Columns are unbraced over their full height for LTB; purlins restrain the
+    # rafter's top flange, so a rafter's unbraced length is the purlin spacing.
     for f in range(len(frame_y)):
-        # Columns: unbraced over their full height for LTB.
-        add_member(index[(f, 0)], index[(f, 1)], column, f"column L f{f}", eaves_height)
-        add_member(index[(f, last_station)], index[(f, last_station - 1)], column,
-                   f"column R f{f}", eaves_height)
-        # Rafter segments. Purlins restrain the rafter's top flange, so the
-        # unbraced length for LTB is the purlin spacing, not the whole rafter.
-        seg = slope_len / n_purlin
-        for k in range(1, last_station - 1):
-            add_member(index[(f, k)], index[(f, k + 1)], rafter, f"rafter f{f} s{k}", seg)
+        col = 0
+        for i, j, role, piece_len, _ in pieces:
+            if role == "column":
+                tag = f"column c{col} f{f}"
+                col += 1
+                add_member(index[(f, i)], index[(f, j)], column, tag, piece_len)
+            else:
+                add_member(index[(f, i)], index[(f, j)], rafter,
+                           f"rafter f{f} s{i}", piece_len)
 
-    # Purlins run along Y, connecting the same station on adjacent frames.
+    # Purlins run along Y, connecting the same station on adjacent frames. Only
+    # rafter stations carry them -- a column's own base is not a purlin line.
+    rafter_stations = sorted({st for i, j, role, _, _ in pieces if role == "rafter"
+                              for st in (i, j)})
     purlin_members: list[tuple[int, int]] = []  # (member index, station)
     for f in range(len(frame_y) - 1):
-        for k in range(1, last_station):
-            e = add_member(index[(f, k)], index[(f + 1, k)], purlin, f"purlin s{k} b{f}",
-                           length / n_bays)
-            purlin_members.append((e, k))
+        for st in rafter_stations:
+            e = add_member(index[(f, st)], index[(f + 1, st)], purlin,
+                           f"purlin s{st} b{f}", length / n_bays)
+            purlin_members.append((e, st))
 
     supports = {}
     kind = "pinned" if pinned_bases else "fixed"
     for f in range(len(frame_y)):
-        supports[index[(f, 0)]] = kind
-        supports[index[(f, last_station)]] = kind
+        for (x, z), st in stations.items():
+            if z == 0.0:
+                supports[index[(f, st)]] = kind
 
     # -- snow, applied to the purlins -----------------------------------------
-    # A purlin's tributary width is the slope distance it collects, but the
-    # snow load is defined on the horizontal projection, so multiply by cos.
-    trib_slope = slope_len / n_purlin  # full spacing; edges get half
-    left_factor, right_factor = 1.0, 1.0
-    if snow_case == "drift_left":
-        right_factor = 0.5
-    elif snow_case == "drift_right":
-        left_factor = 0.5
-    elif snow_case != "balanced":
-        raise ValueError("snow_case must be balanced, drift_left or drift_right")
+    # Snow is defined on the horizontal projection, so a station collects half
+    # the *horizontal* run of each rafter piece meeting it, each at the shape
+    # coefficient of the slope that piece belongs to.
+    trib: dict[int, float] = {}
+    for i, j, role, _, s_index in pieces:
+        if role != "rafter":
+            continue
+        run = abs(coords[j][0] - coords[i][0]) / 2.0
+        for st in (i, j):
+            trib[st] = trib.get(st, 0.0) + run * factors[s_index]
 
     member_loads: list[LoadSpec] = []
-    for e, station in purlin_members:
-        edge = station in (1, last_station - 1)  # eaves purlins collect half
-        apex = station == n_left  # apex purlin collects from both slopes
-        width = trib_slope * (0.5 if edge else 1.0)
-        factor = left_factor if station <= n_left else right_factor
-        if apex:
-            width = trib_slope * 0.5 * (left_factor + right_factor)
-            factor = 1.0
-        udl = snow_kn_m2 * width * math.cos(slope) * factor  # kN/m
+    for e, st in purlin_members:
+        udl = snow_kn_m2 * trib.get(st, 0.0)  # kN/m
         if include_self_weight:
             udl += loads.self_weight_udl(get_section(purlin).A)
-        member_loads.append(LoadSpec(member=e, udl_z=gamma_G * 0 + gamma_Q * udl))
+        member_loads.append(LoadSpec(member=e, udl_z=gamma_Q * udl))
 
     if include_self_weight:
         for e, m in enumerate(members):
@@ -328,7 +345,12 @@ def pitched_roof(
                          member_loads=member_loads)
     structure, sections, grades = build(spec)
     return Construction(spec, structure, sections, grades, pitch_deg, span, length,
-                lt, snow_case, snow_kn_m2)
+                        lt, snow_case, snow_kn_m2, profile=frame_profile)
+
+
+def pitched_roof(span: float, length: float, pitch_deg: float, **kwargs) -> Construction:
+    """A duopitch roof -- :func:`roof` with the shape it had before shapes existed."""
+    return roof(span, length, pitch_deg, shape="duopitch", **kwargs)
 
 
 def single_beam(

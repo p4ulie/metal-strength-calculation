@@ -9,8 +9,8 @@ from pathlib import Path
 
 from . import bom as bom_mod
 from . import design as design_mod
-from . import i18n, loads, viz
-from .model import pitched_roof, single_beam
+from . import i18n, loads, shapes, viz
+from .model import roof as build_roof, single_beam
 from .sections import get_section, list_sections
 
 
@@ -68,6 +68,9 @@ def _report(roof, out: Path | None, prefix: str, show: bool = False,
     print()
     print(worst.report())
     print(f"\nserviceability:\n{defl}")
+
+    if getattr(roof.profile, "mu_is_approximate", False):
+        print(f"\n! {i18n.t('mu_approximate', lang)}")
 
     ok = all(c.ok for c in checks) and defl.ok
     print(f"\n=> {i18n.verdict(ok, lang)} "
@@ -130,9 +133,12 @@ def main(argv: list[str] | None = None) -> int:
     beam.add_argument("--show", action="store_true",
                       help="open the charts in windows as well as saving them")
 
-    roof = sub.add_parser("roof", help="generate and check a whole 3D pitched roof")
+    roof = sub.add_parser("roof", help="generate and check a whole 3D roof")
     roof.add_argument("--span", type=float, required=True, help="metres")
     roof.add_argument("--length", type=float, required=True, help="metres")
+    roof.add_argument("--shape", default="duopitch", choices=list(shapes.SHAPES),
+                      help="; ".join(f"{k}: {v}" for k, v in shapes.DESCRIPTIONS.items()
+                                     if k in shapes.SHAPES))
     roof.add_argument("--pitch", type=float, default=20.0, help="degrees")
     roof.add_argument("--eaves-height", type=float, default=3.0)
     roof.add_argument("--frame-spacing", type=float, default=5.0)
@@ -145,7 +151,8 @@ def main(argv: list[str] | None = None) -> int:
     roof.add_argument("--snow-state", default="settled", choices=sorted(loads.SNOW_DENSITY))
     roof.add_argument("--snow", type=float, help="roof snow load in kN/m2 directly")
     roof.add_argument("--case", default="balanced",
-                      choices=["balanced", "drift_left", "drift_right"])
+                      choices=sorted({c for cs in loads.ARRANGEMENTS.values() for c in cs}),
+                      help="snow arrangement; which ones apply depends on --shape")
     roof.add_argument("--out", type=Path)
     roof.add_argument("--show", action="store_true",
                       help="open the charts in windows as well as saving them")
@@ -154,6 +161,9 @@ def main(argv: list[str] | None = None) -> int:
         "design", help="propose a construction that carries a given load")
     design.add_argument("--span", type=float, required=True, help="metres")
     design.add_argument("--length", type=float, required=True, help="metres")
+    design.add_argument("--shape", default="duopitch", choices=list(shapes.SHAPES),
+                        help="; ".join(f"{k}: {v}" for k, v in shapes.DESCRIPTIONS.items()
+                                       if k in shapes.SHAPES))
     design.add_argument("--pitch", type=float, default=20.0, help="degrees")
     design.add_argument("--eaves-height", type=float, default=3.0)
     design.add_argument("--frame-spacing", type=float, default=5.0)
@@ -249,7 +259,7 @@ def main(argv: list[str] | None = None) -> int:
 
     if a.cmd == "design":
         snow = _snow_for(a, p)
-        print(f"designing a {a.span} x {a.length} m roof at {a.pitch}deg, "
+        print(f"designing a {a.shape} {a.span} x {a.length} m roof at {a.pitch}deg, "
               f"{a.grade}, snow {snow:.2f} kN/m2, target utilisation {a.target}")
         prices = None
         if a.objective == "cost" or a.cost or a.prices:
@@ -260,7 +270,7 @@ def main(argv: list[str] | None = None) -> int:
             families={"rafter": a.rafter_family, "column": a.column_family,
                       "purlin": a.purlin_family},
             eaves_height=a.eaves_height, frame_spacing=a.frame_spacing,
-            purlin_spacing=a.purlin_spacing,
+            purlin_spacing=a.purlin_spacing, shape=a.shape,
         )
         print()
         print(design_mod.format_proposal(proposal, a.lang))
@@ -275,7 +285,7 @@ def main(argv: list[str] | None = None) -> int:
                 eaves_height=a.eaves_height, frame_spacing=a.frame_spacing,
                 purlin_spacing=a.purlin_spacing, grade=a.grade,
                 snow_depth=a.snow_depth if a.snow_depth is not None else 1.0,
-                snow_state=a.snow_state, **proposal.sections))
+                snow_state=a.snow_state, shape=a.shape, **proposal.sections))
         print(f"\n{i18n.t('disclaimer', a.lang)}")
         return 0
 
@@ -283,9 +293,11 @@ def main(argv: list[str] | None = None) -> int:
     origin = (f"{a.snow:.2f} kN/m2 given directly" if a.snow is not None
               else f"{a.snow_depth:.2f} m {a.snow_state} snow -> {snow_load:.2f} kN/m2")
 
-    print(f"roof {a.span} x {a.length} m at {a.pitch}deg; {origin}; case {a.case}")
-    roof_obj = pitched_roof(
-        span=a.span, length=a.length, pitch_deg=a.pitch, eaves_height=a.eaves_height,
+    print(f"{a.shape} roof {a.span} x {a.length} m at {a.pitch}deg; {origin}; "
+          f"case {a.case}")
+    roof_obj = build_roof(
+        span=a.span, length=a.length, pitch_deg=a.pitch, shape=a.shape,
+        eaves_height=a.eaves_height,
         frame_spacing=a.frame_spacing, purlin_spacing=a.purlin_spacing,
         rafter=a.rafter, column=a.column, purlin=a.purlin, grade=a.grade,
         snow_kn_m2=snow_load, snow_case=a.case,
@@ -296,7 +308,7 @@ def main(argv: list[str] | None = None) -> int:
         frame_spacing=a.frame_spacing, purlin_spacing=a.purlin_spacing,
         rafter=a.rafter, column=a.column, purlin=a.purlin, grade=a.grade,
         snow_depth=a.snow_depth if a.snow_depth is not None else 1.0,
-        snow_state=a.snow_state, snow_case=a.case,
+        snow_state=a.snow_state, snow_case=a.case, shape=a.shape,
     ))
     if a.bom or a.cost:
         _materials(roof_obj, a)

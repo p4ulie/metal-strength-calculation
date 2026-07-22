@@ -187,7 +187,8 @@ def test_dashboard_builds_with_live_controls():
                         column="HEB200", purlin="SHS100x100x5",
                         snow_depth=1.0, snow_state="settled")
     try:
-        depth, state, sliders = fig._ms_widgets
+        w = fig._ms_widgets
+        depth, state, sliders = w["depth"], w["state"], w["sections"]
         assert set(sliders) == {"rafter", "column", "purlin"}
         assert sliders["rafter"].valtext.get_text() == "IPE300"
         assert state.value_selected == "settled"
@@ -205,7 +206,8 @@ def test_dashboard_resolves_when_a_slider_moves():
                         column="HEB240", purlin="SHS140x140x5",
                         snow_depth=0.5, snow_state="settled")
     try:
-        depth, state, sliders = fig._ms_widgets
+        w = fig._ms_widgets
+        depth, state, sliders = w["depth"], w["state"], w["sections"]
         headline = lambda: fig._suptitle.get_text()
 
         light = headline()
@@ -247,7 +249,7 @@ def test_dashboard_caches_solved_models():
     fig = viz.dashboard(span=12.0, length=15.0, pitch_deg=20.0,
                         snow_depth=1.0, snow_state="settled")
     try:
-        depth, _, _ = fig._ms_widgets
+        depth = fig._ms_widgets["depth"]
         depth.set_val(2.0)  # cold
         t0 = time.perf_counter()
         depth.set_val(1.0)  # already solved at construction
@@ -272,3 +274,57 @@ def test_section_ladder_is_ordered_and_finds_the_start():
     names, idx = viz._ladder("SHS140x140x5")
     assert names[idx] == "SHS140x5"
     assert all(n.startswith("SHS") for n in names)
+
+
+def test_dashboard_shape_radio_reprofiles_the_roof():
+    import matplotlib.pyplot as plt
+
+    plt.close("all")
+    fig = viz.dashboard(span=20.0, length=10.0, pitch_deg=20.0, rafter="IPE300",
+                        column="HEB200", purlin="SHS100x100x5",
+                        snow_depth=1.0, snow_state="settled")
+    try:
+        w = fig._ms_widgets
+        assert w["profile"]().shape == "duopitch"
+        from metal_strength import i18n
+        w["shape"].set_active(list(__import__(
+            "metal_strength.shapes", fromlist=["SHAPES"]).SHAPES).index("multispan"))
+        assert w["profile"]().shape == "multispan"
+        assert i18n.shape_term("multispan", "sk") == "viacloďová"
+    finally:
+        plt.close(fig)
+
+
+def test_dashboard_editor_accepts_a_drag_and_refuses_nonsense():
+    import matplotlib.pyplot as plt
+
+    plt.close("all")
+    fig = viz.dashboard(span=12.0, length=10.0, pitch_deg=20.0, rafter="IPE300",
+                        column="HEB200", purlin="SHS100x100x5",
+                        snow_depth=1.0, snow_state="settled")
+    try:
+        w = fig._ms_widgets
+        w["edit"].set_active(0)  # tick "edit profile"
+        selector = w["editor"]["selector"]
+        assert selector is not None, "ticking the box must arm the vertex editor"
+
+        # Drag the apex up: the polygon includes the two ground points.
+        verts = list(selector.verts)
+        moved = [(x, z + 1.0) if z == max(v[1] for v in verts) else (x, z)
+                 for x, z in verts]
+        selector.onselect(moved)
+        assert w["profile"]().shape == "custom"
+        assert w["profile"]().apex_height > 3.0
+
+        # Dragging a vertex past its neighbour just reorders it -- the editor
+        # sorts by x rather than complaining.
+        selector.onselect([(0.0, 3.0), (8.0, 5.0), (2.0, 3.0), (12.0, 3.0)])
+        assert [x for x, _ in w["profile"]().points] == [0.0, 2.0, 8.0, 12.0]
+
+        # Two vertices landing on the same x cannot be a roof: refused, and the
+        # profile that was there survives.
+        before = w["profile"]().points
+        selector.onselect([(0.0, 3.0), (6.0, 5.0), (6.1, 4.0), (12.0, 3.0)])
+        assert w["profile"]().points == before
+    finally:
+        plt.close(fig)

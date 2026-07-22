@@ -17,7 +17,8 @@ import re
 from dataclasses import dataclass, field
 
 from . import ec3
-from .model import Construction, pitched_roof
+from .model import Construction
+from .model import roof as build_roof
 from .sections import get_section, list_sections
 
 # The families each role is allowed to use, in the order they are preferred.
@@ -68,8 +69,8 @@ class Proposal:
 
 def evaluate(sections: dict[str, str], **roof_kwargs) -> tuple[Construction, float, float, str]:
     """Build and check one candidate. Returns (construction, strength, deflection, governing)."""
-    con = pitched_roof(rafter=sections["rafter"], column=sections["column"],
-                       purlin=sections["purlin"], **roof_kwargs)
+    con = build_roof(rafter=sections["rafter"], column=sections["column"],
+                     purlin=sections["purlin"], **roof_kwargs)
     results = con.solve()
     checks = con.check(results)
     worst = max(checks, key=lambda c: c.utilisation)

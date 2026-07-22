@@ -1,7 +1,7 @@
 # Roof shapes — design
 
 Date: 2026-07-22
-Status: approved, ready for implementation planning
+Status: implemented (2026-07-22)
 
 ## Goal
 
@@ -29,8 +29,6 @@ break. That is a separate, much larger piece of work.
 
 - Per-shape geometry knobs on the CLI. Proportions are baked into the presets.
 - Wind loading. Not covered today and not added here.
-- A freeform profile editor. It becomes cheap once this lands (see below), but
-  it is not part of this cut.
 
 ## Architecture
 
@@ -145,14 +143,34 @@ translated to sk and cs like every other user-facing string.
 Existing suites must pass unchanged — that is the point of keeping
 `pitched_roof()`.
 
-## Follow-on: freeform profile designer
+### 6. GUI profile editor (in this cut)
 
-Not in this cut, but this design is what makes it cheap. Once the profile is a
-`Frame` of segments, "freeform" is supplying the points directly instead of a
-preset generating them, and the presets become thin wrappers over the same
-input path.
+The `--show` dashboard gets a shape radio group, and the profile itself becomes
+editable with `matplotlib.widgets.PolygonSelector` — draggable vertices, no new
+dependency, in the window that already exists.
 
-Its real ceiling is not geometry, it is that no code can derive a Eurocode mu
-from an arbitrary polyline. The user would have to nominate the nearest
-standard shape (or the tool classifies by segment pitch), and the result is
-labelled approximate — the same `mu_approximate` machinery this cut adds.
+- The deflected-shape panel doubles as the editor: the frame outline plus the
+  two base points at `z == 0` closes the polygon naturally.
+- Dragging a vertex snaps `x` to 0.25 m. Vertices are re-sorted by `x`, so
+  dragging one past its neighbour reorders rather than failing.
+- The solve happens when the selector reports the edit, which matplotlib does on
+  mouse release, so a drag does not stutter.
+- **Built without** the symmetry mirror this section first proposed: sorting
+  already keeps every drag valid, and a mirror is another mode to explain. Add
+  it if editing a symmetric roof turns out to be tedious in practice.
+- The edited vertex list *is* a `Frame`, so nothing downstream changes.
+- Editing switches the shape to `custom`. mu cannot be derived from an
+  arbitrary polyline, so the shape radio stays live and nominates which
+  Eurocode shape supplies mu; the result is stamped approximate through the
+  same `mu_approximate` machinery.
+
+**Validity guard** (not optional): a profile must be strictly monotonic in `x`
+from left eaves to right eaves and free of self-intersections, because the
+purlin and snow logic assumes stations march left to right. `shapes.validate()`
+rejects anything else with a message, and the editor refuses the drag rather
+than handing a broken frame to the solver.
+
+## Follow-on
+
+Loading and saving custom profiles (JSON), and a CLI flag to pass a profile
+file, so an edited shape can be replayed without the GUI.
