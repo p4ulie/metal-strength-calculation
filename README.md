@@ -33,6 +33,30 @@ uv run python -m metal_strength.cli beam --span 6 --section IPE200 --udl 5 --sho
 | Output | `viz.py`, `viewer.py` | matplotlib charts (files or windows), pygame viewer |
 | LLM access | `mcp_server.py` | MCP over stdio, 9 tools |
 
+## Command line
+
+Four subcommands. `--out DIR` writes charts, `--show` opens them in windows
+(both work together; `--show` alone uses a temp directory).
+
+```
+metal-strength snow     --depth 1.0 --state wet --pitch 20
+metal-strength snow     --zone 2 --altitude 400 --region central_east --pitch 20
+metal-strength beam     --span 6 --section IPE200 --udl 5 [--point 20]
+                        [--fixity simple|cantilever|fixed|propped] [--restrained]
+metal-strength roof     --span 12 --length 20 --pitch 20 --snow-depth 1.0
+                        [--snow-state wet] [--snow 3.2] [--case drift_left]
+                        [--rafter IPE450] [--column HEB240] [--purlin SHS140x140x5]
+                        [--frame-spacing 5] [--purlin-spacing 1.5] [--eaves-height 3]
+                        [--grade S355]
+metal-strength sections IPE300
+metal-strength sections --family HEB
+```
+
+`--restrained` on a beam means a deck or purlins hold the compression flange
+sideways, so lateral-torsional buckling cannot occur. Leaving it off is the
+conservative assumption and often halves the capacity — it is usually the check
+that governs an unrestrained beam.
+
 ## How much is a metre of snow?
 
 Between **1.0 and 4.0 kN/m²** — a 4× spread — depending on its state
@@ -95,18 +119,28 @@ cannot silently drift from the engine.
 
 ## Validation
 
-`uv run pytest` — 106 tests, ~3 s.
+`uv run pytest` — 123 tests, ~15 s. Nothing is checked against itself; every
+layer is validated against something derived independently of it.
 
-- **FEM vs closed-form**: cantilever, simply supported, fixed-fixed, propped,
-  pure torsion, pure axial, portal-frame equilibrium, pin-ended truss, and the
-  same cantilever rotated into three global directions (0.1 % tolerance).
-- **Sections vs catalogue**: A, I, W to 0.5 % for IPE/HEA/HEB/CHS/SHS/RHS.
-- **Sections vs an independent algorithm**: `pytest -m slow` re-derives all 90
-  I-profiles by mesh integration via `blue-prints` (~4 min).
-- **EC3 vs hand calculation**: every expected number is derived in a comment
-  above its assertion, e.g. IPE300 S235 at 6 m gives χ = 0.2279, N_b,Rd = 288 kN.
-- **Skill vs code**: 17 tests parsing the markdown tables.
-- **MCP over real stdio**: `tests/smoke_mcp.py`, 9/9 tools.
+| Suite | n | Checked against |
+|---|---|---|
+| `test_frame3d.py` | 13 | Closed-form solutions to 0.1 %: cantilever (point and UDL), simply supported, fixed-fixed, propped, pure torsion `TL/GJ`, pure axial, portal-frame equilibrium, pin-ended truss, mechanism detection, and the same cantilever rotated into three global directions — which is what catches a wrong direction-cosine matrix. |
+| `test_sections.py` | 14 | Published catalogue values to 0.5 % across IPE/HEA/HEB/CHS/SHS/RHS. `pytest -m slow` adds an independent re-derivation of all 90 I-profiles by mesh integration via `blue-prints` (~4 min). |
+| `test_ec3.py` | 12 | Hand calculations, each derived in a comment above its assertion — e.g. IPE300 S235 at 6 m gives λ̄ = 1.907, χ = 0.2279, N_b,Rd = 288 kN. |
+| `test_loads.py` | 23 | EN 1991-1-3 by hand: snow densities, μ₁ at every pitch break, snow guards, exposure, the Annex C altitude term, EN 1990 combinations. |
+| `test_model.py` | 14 | Roof geometry (apex height, frame count, purlin-restrained LTB lengths), unit conversion at the metres/kN boundary, and monotonicity — more snow and smaller sections must raise utilisation. |
+| `test_skill_consistency.py` | 17 | The skill's markdown parsed back out and compared to the code: grades, partial factors, χ tables, snow densities, classification limits, and every closed-form beam formula re-derived by the FEM engine. |
+| `test_mcp_server.py` | 13 | Every tool registers with a description, round-trips its pydantic model, and gives the right answer — including that an undersized roof actually fails. |
+| `test_viz.py` | 11 | Both chart modes, and that a backend switch cannot leak into later tests. |
+| `test_viewer.py` | 6 | All three font fallback paths (including simulated total failure) plus the real render loop, headless. |
+
+Plus `tests/smoke_mcp.py` — drives the server over a real stdio transport and
+calls all 9 tools (9/9).
+
+Two of the bugs these caught were in the documentation, not the code: the χ
+table written by hand was wrong in four of five columns, and one recalled
+catalogue `Iz` was 3 % off. Both surfaced only because the tables are compared
+against the implementation.
 
 ## Interactive viewer
 

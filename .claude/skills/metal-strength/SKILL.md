@@ -26,10 +26,22 @@ To use the package (this repo):
 uv run python -m metal_strength.cli beam --span 6 --section IPE200 --udl 5
 uv run python -m metal_strength.cli roof --span 12 --length 20 --pitch 20 \
     --snow-depth 1.0 --snow-state wet
+uv run python -m metal_strength.cli snow --depth 1.0 --state wet --pitch 20
 uv run python -m metal_strength.cli sections IPE300
 ```
+
+Add `--show` to open the charts in windows, or `--out DIR` to save them as
+PNGs — the moment/shear diagrams, deflected shape, 3D utilisation plot and a
+ranked bar chart of the worst members. Reach for a chart when the user asks
+*where* or *why* something fails, not just whether it does.
+
 Or the MCP server (`python -m metal_strength.mcp_server`): `check_beam`,
-`check_rod_buckling`, `check_roof`, `snow_load_from_depth`, `section_properties`.
+`check_rod_buckling`, `check_roof`, `solve_frame`, `snow_load_from_depth`,
+`snow_load_eurocode`, `section_properties`, `list_sections`,
+`render_snow_cases`. Pass `charts=True` to get image paths back.
+
+`solve_frame` takes an arbitrary structure as JSON (nodes in metres, loads in
+kN, global Z up) — use it when the shape is not a standard pitched roof.
 
 ## The order to check things
 
