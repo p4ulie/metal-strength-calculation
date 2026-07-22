@@ -1,0 +1,433 @@
+"""MCP server exposing the calculator to an LLM. stdio transport.
+
+Run with ``python -m metal_strength.mcp_server``. Every tool carries an explicit
+``description`` rather than relying on docstring parsing, and returns typed
+pydantic models so results arrive structured rather than as prose.
+"""
+
+from __future__ import annotations
+
+import tempfile
+from pathlib import Path
+from typing import Literal
+
+from mcp.server.fastmcp import FastMCP
+from pydantic import BaseModel, Field
+
+from . import ec3, loads, viz
+from .model import StructureSpec, build, pitched_roof, single_beam
+from .sections import get_section, list_sections
+
+mcp = FastMCP("metal-strength")
+
+CHARTS = Path(tempfile.gettempdir()) / "metal-strength-charts"
+
+DISCLAIMER = (
+    "Indicative Eurocode check, not a substitute for a licensed structural "
+    "engineer. Second-order effects, connections, base plates and wind load "
+    "(EN 1991-1-4) are not covered."
+)
+
+
+# --- response models --------------------------------------------------------
+
+
+class SnowResult(BaseModel):
+    sk_kn_m2: float = Field(description="characteristic ground snow load")
+    explanation: str
+    cases: list[dict] = Field(default_factory=list,
+                              description="roof arrangements, kN/m2 per slope")
+
+
+class SectionResult(BaseModel):
+    name: str
+    family: str
+    mass_kg_per_m: float
+    area_cm2: float
+    depth_mm: float
+    width_mm: float
+    Iy_cm4: float
+    Iz_cm4: float
+    Wel_y_cm3: float
+    Wpl_y_cm3: float
+    It_cm4: float
+    Iw_1e3cm6: float
+    iy_mm: float
+    iz_mm: float
+
+
+class CheckLine(BaseModel):
+    name: str
+    clause: str
+    utilisation: float
+    demand: float
+    capacity: float
+    unit: str
+    ok: bool
+    note: str = ""
+
+
+class MemberVerdict(BaseModel):
+    member: str
+    section_class: int
+    utilisation: float
+    governing: str
+    ok: bool
+    checks: list[CheckLine]
+    warnings: list[str]
+
+
+class StructureVerdict(BaseModel):
+    ok: bool
+    worst_utilisation: float
+    governing_member: str
+    governing_check: str
+    deflection_mm: float
+    deflection_limit_mm: float
+    members_checked: int
+    worst_members: list[MemberVerdict]
+    charts: list[str] = Field(default_factory=list)
+    disclaimer: str = DISCLAIMER
+
+
+def _lines(result: ec3.MemberResult) -> list[CheckLine]:
+    return [
+        CheckLine(name=c.name, clause=c.clause, utilisation=round(c.utilisation, 4),
+                  demand=c.demand, capacity=c.capacity, unit=c.unit, ok=c.ok, note=c.note)
+        for c in sorted(result.checks, key=lambda c: -c.utilisation)
+    ]
+
+
+def _verdict(result: ec3.MemberResult) -> MemberVerdict:
+    return MemberVerdict(
+        member=result.section, section_class=result.section_class,
+        utilisation=round(result.utilisation, 4),
+        governing=result.governing.name if result.governing else "none",
+        ok=result.ok, checks=_lines(result), warnings=result.warnings,
+    )
+
+
+# --- tools ------------------------------------------------------------------
+
+
+@mcp.tool(
+    name="snow_load_from_depth",
+    description=(
+        "Convert a measured snow depth into a ground snow load in kN/m2 using the "
+        "EN 1991-1-3 bulk densities. Use this for questions like 'how much does 1 "
+        "metre of snow weigh on a roof'. The snow state matters enormously: 1 m of "
+        "fresh snow is 1.0 kN/m2 but 1 m of wet snow is 4.0 kN/m2."
+    ),
+)
+def snow_load_from_depth(
+    depth_m: float,
+    state: Literal["fresh", "settled", "old", "wet"] = "settled",
+    pitch_deg: float = 0.0,
+    exposure: Literal["windswept", "normal", "sheltered"] = "normal",
+) -> SnowResult:
+    sk = loads.snow_from_depth(depth_m, state)
+    cases = loads.roof_snow_load(sk, pitch_deg, exposure=exposure)
+    return SnowResult(
+        sk_kn_m2=round(sk, 3),
+        explanation=(
+            f"{depth_m:.2f} m of {state} snow at {loads.SNOW_DENSITY[state]:.1f} kN/m3 "
+            f"= {sk:.2f} kN/m2 on the ground. On a {pitch_deg:.0f} degree roof with "
+            f"{exposure} exposure, mu1={loads.mu1(pitch_deg):.2f} and "
+            f"Ce={loads.EXPOSURE[exposure]:.1f}."
+        ),
+        cases=[{"case": c.name, "left_kn_m2": round(c.left, 3),
+                "right_kn_m2": round(c.right, 3)} for c in cases],
+    )
+
+
+@mcp.tool(
+    name="snow_load_eurocode",
+    description=(
+        "Characteristic ground snow load from a national snow-map zone number and "
+        "site altitude, via EN 1991-1-3 Annex C, then the design roof loads for all "
+        "required arrangements. Use when the user gives a location zone rather than a "
+        "snow depth. Slovakia, Czechia, Poland, Hungary use region 'central_east'."
+    ),
+)
+def snow_load_eurocode(
+    zone: float,
+    altitude_m: float = 0.0,
+    region: Literal["alpine", "central_east", "central_west", "greece", "iberian",
+                    "mediterranean", "sub_atlantic"] = "central_east",
+    pitch_deg: float = 0.0,
+    roof_type: Literal["monopitch", "duopitch"] = "duopitch",
+    exposure: Literal["windswept", "normal", "sheltered"] = "normal",
+    snow_guards: bool = False,
+) -> SnowResult:
+    sk = loads.sk_from_zone(zone, altitude_m, region)
+    cases = loads.roof_snow_load(sk, pitch_deg, roof_type, exposure,
+                                 snow_guards=snow_guards)
+    return SnowResult(
+        sk_kn_m2=round(sk, 3),
+        explanation=(
+            f"EN 1991-1-3 Annex C, {region}: zone {zone} at {altitude_m:.0f} m gives "
+            f"sk = {sk:.2f} kN/m2. The national annex takes precedence if you have it."
+        ),
+        cases=[{"case": c.name, "left_kn_m2": round(c.left, 3),
+                "right_kn_m2": round(c.right, 3)} for c in cases],
+    )
+
+
+@mcp.tool(
+    name="list_sections",
+    description=(
+        "List available steel profile names, optionally filtered by family "
+        "(IPE, HEA, HEB, HEM, CHS, SHS, RHS). Call this before section_properties "
+        "if unsure how a profile is spelled."
+    ),
+)
+def list_sections_tool(family: str | None = None, limit: int = 60) -> dict:
+    names = list_sections(family)
+    return {"count": len(names), "families": ["IPE", "HEA", "HEB", "HEM", "CHS", "SHS", "RHS"],
+            "names": names[:limit], "truncated": len(names) > limit}
+
+
+@mcp.tool(
+    name="section_properties",
+    description=(
+        "Geometric and section properties of a steel profile: area, second moments "
+        "of area, elastic and plastic section moduli, torsion and warping constants, "
+        "radii of gyration and mass per metre. Accepts catalogue names like IPE300, "
+        "HEB200, CHS114.3x5, SHS100x100x5, RHS200x100x8."
+    ),
+)
+def section_properties(name: str) -> SectionResult:
+    s = get_section(name)
+    return SectionResult(
+        name=s.name, family=s.family, mass_kg_per_m=round(s.mass_per_m, 2),
+        area_cm2=round(s.A / 1e2, 2), depth_mm=s.h, width_mm=s.b,
+        Iy_cm4=round(s.Iy / 1e4, 1), Iz_cm4=round(s.Iz / 1e4, 1),
+        Wel_y_cm3=round(s.Wel_y / 1e3, 1), Wpl_y_cm3=round(s.Wpl_y / 1e3, 1),
+        It_cm4=round(s.It / 1e4, 2), Iw_1e3cm6=round(s.Iw / 1e9, 1),
+        iy_mm=round(s.iy, 1), iz_mm=round(s.iz, 1),
+    )
+
+
+@mcp.tool(
+    name="check_beam",
+    description=(
+        "Check a single steel beam or rod against EN 1993-1-1: bending, shear, "
+        "lateral-torsional buckling and deflection. This is the tool for 'will this "
+        "beam hold', 'what is the safe load', 'is this rod strong enough'. Loads are "
+        "DESIGN (already factored) values: multiply characteristic snow by 1.5 and "
+        "self weight by 1.35, or use check_roof which does it for you. Set restrained "
+        "to true when a deck or purlins hold the compression flange sideways."
+    ),
+)
+def check_beam(
+    span_m: float,
+    section: str = "IPE200",
+    grade: Literal["S235", "S275", "S355", "S420", "S460"] = "S235",
+    udl_kn_per_m: float = 0.0,
+    point_load_kn: float = 0.0,
+    fixity: Literal["simple", "cantilever", "fixed", "propped"] = "simple",
+    restrained: bool = False,
+    deflection_limit: Literal["roof_general", "roof_brittle_finish", "floor"] = "roof_general",
+    charts: bool = False,
+) -> StructureVerdict:
+    beam = single_beam(span_m, section, grade, udl_kn_per_m, point_load_kn,
+                       fixity, restrained)
+    results = beam.solve()
+    checks = beam.check(results)
+    defl = beam.deflection(results, deflection_limit)
+    ranked = sorted(checks, key=lambda c: -c.utilisation)
+    worst = ranked[0]
+
+    paths: list[str] = []
+    if charts:
+        CHARTS.mkdir(parents=True, exist_ok=True)
+        stem = f"beam_{section}_{span_m:g}m"
+        paths = [
+            str(viz.force_diagrams(results, checks.index(worst),
+                                   CHARTS / f"{stem}_forces.png", worst.section)),
+            str(viz.deflected_shape(beam, results, CHARTS / f"{stem}_deflection.png")),
+        ]
+
+    return StructureVerdict(
+        ok=all(c.ok for c in checks) and defl.ok,
+        worst_utilisation=round(worst.utilisation, 3),
+        governing_member=worst.section,
+        governing_check=worst.governing.name if worst.governing else "none",
+        deflection_mm=round(defl.demand, 2),
+        deflection_limit_mm=round(defl.capacity, 2),
+        members_checked=len(checks),
+        worst_members=[_verdict(worst)],
+        charts=paths,
+    )
+
+
+@mcp.tool(
+    name="check_rod_buckling",
+    description=(
+        "Compression (Euler / EN 1993-1-1 6.3.1) buckling capacity of a strut or rod. "
+        "Returns the design buckling resistance about both axes, the reduction factor "
+        "chi and the slenderness. Effective length factor: 0.5 both ends fixed, 0.7 "
+        "one fixed one pinned, 1.0 both pinned, 2.0 cantilever."
+    ),
+)
+def check_rod_buckling(
+    length_m: float,
+    section: str = "CHS60.3x3.2",
+    grade: Literal["S235", "S275", "S355", "S420", "S460"] = "S235",
+    effective_length_factor: float = 1.0,
+    axial_load_kn: float = 0.0,
+) -> dict:
+    s = get_section(section)
+    fy, _ = ec3.yield_strength(grade, max(s.tf, s.tw))
+    Lcr = length_m * 1000.0 * effective_length_factor
+    out: dict = {"section": s.name, "grade": grade, "fy_mpa": fy,
+                 "effective_length_m": round(Lcr / 1000.0, 3),
+                 "squash_load_kn": round(s.A * fy / 1e3, 1)}
+    for axis in ("y", "z"):
+        Nb, chi, lam = ec3.flexural_buckling(s, fy, Lcr, axis)
+        out[f"buckling_{axis}{axis}"] = {
+            "curve": ec3.buckling_curve(s, fy, axis),
+            "slenderness": round(lam, 3), "chi": round(chi, 4),
+            "N_b_Rd_kn": round(Nb / 1e3, 1),
+        }
+    governing = min(out["buckling_yy"]["N_b_Rd_kn"], out["buckling_zz"]["N_b_Rd_kn"])
+    out["capacity_kn"] = governing
+    if axial_load_kn:
+        out["utilisation"] = round(abs(axial_load_kn) / governing, 3)
+        out["ok"] = abs(axial_load_kn) <= governing
+    out["disclaimer"] = DISCLAIMER
+    return out
+
+
+@mcp.tool(
+    name="check_roof",
+    description=(
+        "Build and check a complete 3D pitched steel roof under snow: portal frames "
+        "at spacing with purlins between them, solved by 3D frame FEM and verified "
+        "member by member against EN 1993-1-1. This is the tool for 'will my roof "
+        "hold 1 metre of snow'. Give the snow either as a depth plus state, or "
+        "directly in kN/m2. Load factors (1.35 permanent, 1.5 snow) are applied "
+        "internally, so give characteristic values."
+    ),
+)
+def check_roof(
+    span_m: float,
+    length_m: float,
+    pitch_deg: float = 20.0,
+    snow_depth_m: float | None = None,
+    snow_state: Literal["fresh", "settled", "old", "wet"] = "settled",
+    snow_kn_m2: float | None = None,
+    eaves_height_m: float = 3.0,
+    frame_spacing_m: float = 5.0,
+    purlin_spacing_m: float = 1.5,
+    rafter: str = "IPE300",
+    column: str = "HEB200",
+    purlin: str = "SHS100x100x5",
+    grade: Literal["S235", "S275", "S355", "S420", "S460"] = "S235",
+    case: Literal["balanced", "drift_left", "drift_right"] = "balanced",
+    charts: bool = False,
+) -> StructureVerdict:
+    if snow_kn_m2 is None:
+        if snow_depth_m is None:
+            raise ValueError("give either snow_depth_m or snow_kn_m2")
+        sk = loads.snow_from_depth(snow_depth_m, snow_state)
+        snow_kn_m2 = loads.roof_snow_load(sk, pitch_deg)[0].left
+
+    roof = pitched_roof(
+        span=span_m, length=length_m, pitch_deg=pitch_deg,
+        eaves_height=eaves_height_m, frame_spacing=frame_spacing_m,
+        purlin_spacing=purlin_spacing_m, rafter=rafter, column=column,
+        purlin=purlin, grade=grade, snow_kn_m2=snow_kn_m2, snow_case=case,
+    )
+    results = roof.solve()
+    checks = roof.check(results)
+    defl = roof.deflection(results)
+    ranked = sorted(checks, key=lambda c: -c.utilisation)
+    worst = ranked[0]
+
+    paths: list[str] = []
+    if charts:
+        CHARTS.mkdir(parents=True, exist_ok=True)
+        stem = f"roof_{span_m:g}x{length_m:g}_{case}"
+        paths = [
+            str(viz.utilisation_3d(roof, checks, CHARTS / f"{stem}_utilisation.png")),
+            str(viz.utilisation_bars(checks, CHARTS / f"{stem}_ranking.png")),
+            str(viz.deflected_shape(roof, results, CHARTS / f"{stem}_deflection.png")),
+            str(viz.force_diagrams(results, checks.index(worst),
+                                   CHARTS / f"{stem}_forces.png", worst.section)),
+        ]
+
+    return StructureVerdict(
+        ok=all(c.ok for c in checks) and defl.ok,
+        worst_utilisation=round(worst.utilisation, 3),
+        governing_member=worst.section,
+        governing_check=worst.governing.name if worst.governing else "none",
+        deflection_mm=round(defl.demand, 2),
+        deflection_limit_mm=round(defl.capacity, 2),
+        members_checked=len(checks),
+        worst_members=[_verdict(c) for c in ranked[:5]],
+        charts=paths,
+    )
+
+
+@mcp.tool(
+    name="solve_frame",
+    description=(
+        "Solve an arbitrary 3D frame given explicitly as nodes, members, supports and "
+        "loads, and check every member to EN 1993-1-1. Use when the structure is not "
+        "a standard pitched roof. Nodes are in metres, loads in kN and kN/m, global Z "
+        "is up. Supports are 'fixed', 'pinned', 'roller' or 'free'."
+    ),
+)
+def solve_frame(spec: StructureSpec, charts: bool = False) -> StructureVerdict:
+    from .model import Roof
+
+    structure, sections, grades = build(spec)
+    span = max(n.x for n in spec.nodes) - min(n.x for n in spec.nodes)
+    roof = Roof(spec, structure, sections, grades, 0.0, max(span, 1e-6), 0.0)
+    results = roof.solve()
+    checks = roof.check(results)
+    defl = roof.deflection(results)
+    ranked = sorted(checks, key=lambda c: -c.utilisation)
+    worst = ranked[0]
+
+    paths: list[str] = []
+    if charts:
+        CHARTS.mkdir(parents=True, exist_ok=True)
+        paths = [
+            str(viz.utilisation_3d(roof, checks, CHARTS / "frame_utilisation.png")),
+            str(viz.deflected_shape(roof, results, CHARTS / "frame_deflection.png")),
+        ]
+
+    return StructureVerdict(
+        ok=all(c.ok for c in checks) and defl.ok,
+        worst_utilisation=round(worst.utilisation, 3),
+        governing_member=worst.section,
+        governing_check=worst.governing.name if worst.governing else "none",
+        deflection_mm=round(defl.demand, 2),
+        deflection_limit_mm=round(defl.capacity, 2),
+        members_checked=len(checks),
+        worst_members=[_verdict(c) for c in ranked[:5]],
+        charts=paths,
+    )
+
+
+@mcp.tool(
+    name="render_snow_cases",
+    description=(
+        "Draw the EN 1991-1-3 snow load arrangements on a roof profile and return the "
+        "image path. Useful for explaining why an unbalanced drift case can govern."
+    ),
+)
+def render_snow_cases(sk_kn_m2: float, pitch_deg: float) -> dict:
+    CHARTS.mkdir(parents=True, exist_ok=True)
+    p = viz.snow_cases(sk_kn_m2, pitch_deg, CHARTS / f"snow_{sk_kn_m2:g}_{pitch_deg:g}.png")
+    return {"path": str(p)}
+
+
+def main() -> None:
+    mcp.run()
+
+
+if __name__ == "__main__":
+    main()
