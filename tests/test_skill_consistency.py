@@ -239,3 +239,26 @@ def test_effective_length_factors_quoted_are_the_ones_that_work():
     fixed = ec3.flexural_buckling(s, 235.0, 4000.0 * 0.5, "z")[0]
     cantilever = ec3.flexural_buckling(s, 235.0, 4000.0 * 2.0, "z")[0]
     assert cantilever < base < fixed
+
+
+def test_every_mcp_tool_is_documented():
+    """A tool nobody can find is a tool that does not exist."""
+    import asyncio
+
+    from metal_strength import mcp_server
+
+    names = {t.name for t in asyncio.run(mcp_server.mcp.list_tools())}
+    docs = (Path("README.md").read_text()
+            + Path(".claude/skills/metal-strength/SKILL.md").read_text())
+    assert not {n for n in names if n not in docs}
+
+
+def test_the_docs_do_not_offer_flags_that_were_removed():
+    """--http and --live are gone; nothing should still tell you to type them."""
+    for path in (Path("README.md"),
+                 Path(".claude/skills/metal-strength/SKILL.md"),
+                 Path("ms")):
+        text = path.read_text()
+        assert "--http" not in text, path
+        assert "--live" not in text, path
+        assert "metal_strength.viewer" not in text, path

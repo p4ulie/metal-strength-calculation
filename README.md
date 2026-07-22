@@ -34,10 +34,10 @@ uv run python -m metal_strength.cli beam --span 6 --section IPE200 --udl 5 --sho
 | Costing | `bom.py` | material list, indicative prices, VAT |
 | Language | `i18n.py` | report labels in en / sk / cs |
 | Output | `viz.py` | charts as PNGs, one window, or a live dashboard |
-| LLM access | `mcp_server.py` | MCP over stdio, 12 tools |
+| LLM access | `mcp_server.py` | MCP over stdio or HTTP, 14 tools |
 
 There is a `./ms` wrapper in the repo carrying the parameters worth not
-retyping (`./ms`, `./ms design --cost`, `./ms serve --http --show`). Anything
+retyping (`./ms`, `./ms design --cost`, `./ms serve`). Anything
 you pass overrides its defaults.
 
 ## Roof shapes
@@ -228,11 +228,38 @@ OK   shear z (web)           0.39  137/348 kN   [6.2.6]
 
 ## MCP server
 
+Two transports. **HTTP** comes up on its own whenever a window opens; **stdio**
+is for a client that launches the process itself.
+
 ```
-uv run python -m metal_strength.cli roof --span 12 --length 20 --show   # window + MCP on :8000
-uv run python -m metal_strength.cli serve                               # stdio, no window
-uv run python -m metal_strength.mcp_server                              # same, for MCP client configs
-uv run python tests/smoke_mcp.py                  # exercise every tool
+./ms                              # dashboard + HTTP MCP at http://127.0.0.1:8000/mcp
+./ms --port 8100                  # same, elsewhere
+./ms --host 0.0.0.0               # reachable from other machines (read the warning)
+./ms --no-mcp                     # window only
+
+./ms serve                        # stdio, no window
+uv run python -m metal_strength.mcp_server    # the same, for MCP client configs
+uv run python tests/smoke_mcp.py              # exercise every tool over stdio
+```
+
+The endpoint is **`/mcp`**, streamable-http. Point a client at it:
+
+```python
+from mcp import ClientSession
+from mcp.client.streamable_http import streamablehttp_client
+
+async with streamablehttp_client("http://127.0.0.1:8000/mcp") as (r, w, _):
+    async with ClientSession(r, w) as session:
+        await session.initialize()
+        await session.call_tool("tune_roof", {"shape": "multispan", "span_m": 30})
+```
+
+Claude Desktop and similar launch the server themselves, so they want the stdio
+form:
+
+```json
+{"command": "uv", "args": ["run", "python", "-m", "metal_strength.mcp_server"],
+ "cwd": "/path/to/strength-calculation"}
 ```
 
 Tools: `snow_load_from_depth`, `snow_load_eurocode`, `list_sections`,
