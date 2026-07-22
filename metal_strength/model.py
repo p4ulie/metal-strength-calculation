@@ -115,8 +115,13 @@ def build(spec: StructureSpec) -> tuple[frame3d.Structure, list[Section], list[s
 
 
 @dataclass
-class Roof:
-    """A generated 3D roof plus the bookkeeping needed to check it."""
+class Construction:
+    """A generated 3D structure plus the bookkeeping needed to check it.
+
+    Not necessarily a roof -- the same container holds a single beam, a portal
+    frame, or anything ``build()`` produces. ``span`` is whatever dimension the
+    deflection limit should be measured against.
+    """
 
     spec: StructureSpec
     structure: frame3d.Structure
@@ -130,8 +135,24 @@ class Roof:
     snow_case: str = ""
     snow_kn_m2: float = 0.0
 
+    kind: str = "construction"
+
     def solve(self) -> frame3d.Results:
         return frame3d.solve(self.structure)
+
+    def structure_length(self, member: int) -> float:
+        """Length of one member in mm."""
+        return frame3d.member_length(self.structure, self.structure.members[member])
+
+    @property
+    def total_length_m(self) -> float:
+        return sum(self.structure_length(e) for e in
+                   range(len(self.structure.members))) / M_TO_MM
+
+    @property
+    def total_mass_kg(self) -> float:
+        return sum(s.mass_per_m * self.structure_length(e) / M_TO_MM
+                   for e, s in enumerate(self.sections))
 
     def deflection(
         self, results: frame3d.Results, limit: str = "roof_general"
@@ -189,7 +210,7 @@ def pitched_roof(
     pinned_bases: bool = True,
     gamma_G: float = 1.35,
     gamma_Q: float = 1.5,
-) -> Roof:
+) -> Construction:
     """Build a duopitch portal-frame roof and load it with snow.
 
     All lengths in metres, snow in kN/m^2 on the horizontal projection.
@@ -306,7 +327,7 @@ def pitched_roof(
     spec = StructureSpec(nodes=nodes, members=members, supports=supports,
                          member_loads=member_loads)
     structure, sections, grades = build(spec)
-    return Roof(spec, structure, sections, grades, pitch_deg, span, length,
+    return Construction(spec, structure, sections, grades, pitch_deg, span, length,
                 lt, snow_case, snow_kn_m2)
 
 
@@ -319,7 +340,7 @@ def single_beam(
     fixity: str = "simple",
     restrained: bool = False,
     n_elements: int = 8,
-) -> Roof:
+) -> Construction:
     """One beam or rod, the simplest useful case. Lengths in metres, loads in kN.
 
     ``restrained`` means the compression flange is held laterally along its
@@ -347,4 +368,8 @@ def single_beam(
                          point_loads=point, member_loads=udl)
     structure, sections, grades = build(spec)
     lt = {k: 0.0 if restrained else span * M_TO_MM for k in range(n)}
-    return Roof(spec, structure, sections, grades, 0.0, span, 0.0, lt)
+    return Construction(spec, structure, sections, grades, 0.0, span, 0.0, lt)
+
+
+# The container used to be roof-specific; keep the old name importable.
+Roof = Construction

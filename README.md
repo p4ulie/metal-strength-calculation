@@ -30,8 +30,55 @@ uv run python -m metal_strength.cli beam --span 6 --section IPE200 --udl 5 --sho
 | Analysis | `frame3d.py` | 3D direct stiffness, 6 DOF/node, pure numpy |
 | Design checks | `ec3.py` | EN 1993-1-1 §6.2, §6.3 |
 | Geometry | `model.py` | pitched-roof generator, single beams |
-| Output | `viz.py`, `viewer.py` | matplotlib charts (files or windows), pygame viewer |
-| LLM access | `mcp_server.py` | MCP over stdio, 9 tools |
+| Design | `design.py` | proposes sections that carry a given load |
+| Costing | `bom.py` | material list, indicative prices, VAT |
+| Language | `i18n.py` | report labels in en / sk / cs |
+| Output | `viz.py` | charts as PNGs, one window, or a live dashboard |
+| LLM access | `mcp_server.py` | MCP over stdio, 11 tools |
+
+## Design it for me
+
+Instead of checking a construction you drew, let it propose one:
+
+```
+uv run python -m metal_strength.cli design --span 12 --length 20 --pitch 20 \
+    --snow-depth 1.0 --snow-state wet --cost --waste 5 --lang sk --country SK
+```
+
+```
+NAVRHNUTA KONSTRUKCIA   VYHOVUJE
+  rafter     IPE400    66.3 kg/m
+  column     HEB240    83.2 kg/m
+  purlin     SHS100x10 27.4 kg/m
+  vyuzitie   0.96   priehyb 0.62   spolu 11,665 kg
+```
+
+The solver starts from the smallest profile in each family and raises whichever
+role is actually governing, then shrinks back anything it overshot. Typically
+~50 solves, a few seconds. `--target 0.85` leaves headroom; `--objective cost`
+optimises money rather than mass; `--rafter-family HEB` constrains the search.
+If nothing in the catalogue carries the load it says so rather than proposing
+something undersized.
+
+## Material list and cost
+
+`--bom` prints the material list, `--cost` prices it:
+
+```
+prvok      profil      akost  ks  dlzka [m]  spolu [kg]  cena [CZK/kg]  naklady [CZK]
+purlin     SHS100x10   S235   36      5.000      4935.2          22.90        118,666
+rafter     IPE400      S235   40      1.596      4232.8          30.00        133,335
+column     HEB240      S235   10      3.000      2496.0          31.00         81,244
+material bez DPH   13,763.00 EUR  (333,245 CZK)
+DPH 23% (SK)        3,165.49 EUR
+```
+
+`--lang en|sk|cs` translates the report, `--country SK|CZ` sets the VAT rate
+(23% / 21%) and the display currency, `--waste 5` adds an off-cut allowance,
+`--fx` overrides the exchange rate.
+
+**The mass is exact. The money is not.** See
+[Prices — read this](#prices--read-this) before using a total for anything.
 
 ## Command line
 
@@ -48,9 +95,15 @@ metal-strength roof     --span 12 --length 20 --pitch 20 --snow-depth 1.0
                         [--rafter IPE450] [--column HEB240] [--purlin SHS140x140x5]
                         [--frame-spacing 5] [--purlin-spacing 1.5] [--eaves-height 3]
                         [--grade S355]
+metal-strength design   --span 12 --length 20 --pitch 20 --snow-depth 1.0
+                        [--target 0.85] [--objective mass|cost]
+                        [--rafter-family IPE] [--column-family HEB]
 metal-strength sections IPE300
 metal-strength sections --family HEB
 ```
+
+`beam`, `roof` and `design` all accept `--bom`, `--cost`, `--prices FILE`,
+`--lang en|sk|cs`, `--country SK|CZ`, `--waste PERCENT` and `--fx RATE`.
 
 `--restrained` on a beam means a deck or purlins hold the compression flange
 sideways, so lateral-torsional buckling cannot occur. Leaving it off is the
@@ -97,7 +150,10 @@ uv run python tests/smoke_mcp.py                  # exercise every tool
 
 Tools: `snow_load_from_depth`, `snow_load_eurocode`, `list_sections`,
 `section_properties`, `check_beam`, `check_rod_buckling`, `check_roof`,
-`solve_frame`, `render_snow_cases`.
+`solve_frame`, `propose_construction`, `material_list`, `render_snow_cases`.
+
+`propose_construction` is the design solver; `material_list` returns the BOM
+with an indicative cost and a `price_note` that must be repeated to the user.
 
 Register it with Claude Code:
 
@@ -119,7 +175,7 @@ cannot silently drift from the engine.
 
 ## Validation
 
-`uv run pytest` — 123 tests, ~15 s. Nothing is checked against itself; every
+`uv run pytest` — 149 tests, ~75 s (`pytest -m slow` adds 6 more, ~5 min). Nothing is checked against itself; every
 layer is validated against something derived independently of it.
 
 | Suite | n | Checked against |
@@ -132,10 +188,10 @@ layer is validated against something derived independently of it.
 | `test_skill_consistency.py` | 17 | The skill's markdown parsed back out and compared to the code: grades, partial factors, χ tables, snow densities, classification limits, and every closed-form beam formula re-derived by the FEM engine. |
 | `test_mcp_server.py` | 13 | Every tool registers with a description, round-trips its pydantic model, and gives the right answer — including that an undersized roof actually fails. |
 | `test_viz.py` | 11 | Both chart modes, and that a backend switch cannot leak into later tests. |
-| `test_viewer.py` | 6 | All three font fallback paths (including simulated total failure) plus the real render loop, headless. |
+| `test_bom_design.py` | 27 | The solver's own verdict re-checked independently; more load and longer spans must need more steel; an impossible load must be refused, not under-designed. Material-list mass reconciled against the model, VAT arithmetic, and that estimated price rates are declared as estimates. |
 
 Plus `tests/smoke_mcp.py` — drives the server over a real stdio transport and
-calls all 9 tools (9/9).
+calls all 11 tools.
 
 Two of the bugs these caught were in the documentation, not the code: the χ
 table written by hand was wrong in four of five columns, and one recalled
@@ -156,6 +212,44 @@ Some pygame builds (2.6.1 on Python 3.14) ship no compiled SDL_ttf module,
 which leaves a circular import between the pure-Python `pygame.font` and
 `pygame.sysfont`. The viewer detects this and falls back to the `_freetype`
 extension, then to drawing without labels — it will not crash on it.
+
+## Prices — read this
+
+The shipped rates are a **dated snapshot of published Czech list prices**, not a
+quote, and not scraped live. What they are:
+
+| Family | CZK/kg | Basis |
+|---|---|---|
+| IPE | 30.0 | measured — 12 profiles IPE80–IPE330 spanned 29.4–31.0 |
+| HEB | 31.0 | measured — 12 profiles HEB100–HEB320 spanned 28.8–31.6 |
+| SHS / RHS | 22.9 | measured — hollow section (jekl), 1st quality, flat rate |
+| HEA / HEM / CHS | 31.0 / 33.0 / 28.0 | **assumed** — no published list found |
+
+Read 2026-07-22 from [mzhutni.cz IPE](https://www.mzhutni.cz/ipe-c80/),
+[mzhutni.cz HEB](https://www.mzhutni.cz/heb-c84/) and
+[levny-hutni-material.cz](https://www.levny-hutni-material.cz/cenik/ocelove-jekly/).
+VAT rates from [vatcalc](https://www.vatcalc.com/slovakia/slovakia-2026-vat-update/).
+EUR/CZK ≈ 24.22.
+
+Consequences you should hold in mind:
+
+- Rates marked **assumed** are estimates. The report names them every time.
+- `--country SK` converts Czech list prices into euro. A Slovak supplier will
+  quote differently. The report says so.
+- Most SK/CZ steel merchants quote by phone, per order and per quantity. A real
+  quote will not match a list price.
+- Steel moves. A rate read in July is not a rate in December.
+
+**Use your own numbers.** `--prices quote.json` takes a plain file:
+
+```json
+{ "currency": "EUR", "origin": "SK", "vat_rate": {"SK": 0.23},
+  "eur_per_unit": 1.0,
+  "per_kg": {"IPE": 1.50, "HEB": 1.60, "SHS": 1.20, "default": 1.50} }
+```
+
+Costs cover **material only** — no fabrication, coating, connections, transport
+or erection, which on a real building often exceed the steel itself.
 
 ## Limitations — read before trusting a number
 

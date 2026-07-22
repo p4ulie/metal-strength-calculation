@@ -14,7 +14,7 @@ from typing import Literal
 from mcp.server.fastmcp import FastMCP
 from pydantic import BaseModel, Field
 
-from . import ec3, loads, viz
+from . import bom, design, ec3, loads, viz
 from .model import StructureSpec, build, pitched_roof, single_beam
 from .sections import get_section, list_sections
 
@@ -410,6 +410,168 @@ def solve_frame(spec: StructureSpec, charts: bool = False) -> StructureVerdict:
         worst_members=[_verdict(c) for c in ranked[:5]],
         charts=paths,
     )
+
+
+class BomLine(BaseModel):
+    role: str
+    profile: str
+    grade: str
+    qty: int
+    length_each_m: float
+    total_length_m: float
+    total_mass_kg: float
+    rate_per_kg: float | None = None
+    cost: float | None = None
+
+
+class MaterialList(BaseModel):
+    lines: list[BomLine]
+    total_mass_kg: float
+    currency: str | None = None
+    subtotal: float | None = None
+    vat_rate: float | None = None
+    total_incl_vat: float | None = None
+    price_note: str | None = None
+    estimated_rate_families: list[str] = Field(default_factory=list)
+
+
+class Proposal(BaseModel):
+    ok: bool
+    sections: dict[str, str]
+    utilisation: float
+    deflection_utilisation: float
+    governing_check: str
+    total_mass_kg: float
+    combinations_tried: int
+    message: str = ""
+    materials: MaterialList | None = None
+    disclaimer: str = DISCLAIMER
+
+
+def _material_list(construction, prices) -> MaterialList:
+    b = bom.bill_of_materials(construction, prices)
+    lines = [
+        BomLine(role=line.role, profile=line.section, grade=line.grade,
+                qty=line.count, length_each_m=round(line.length_each_m, 3),
+                total_length_m=round(line.total_length_m, 2),
+                total_mass_kg=round(line.total_mass_kg, 1),
+                rate_per_kg=prices.rate(line.family) if prices else None,
+                cost=round(b.line_cost(line), 0) if prices else None)
+        for line in b.lines
+    ]
+    out = MaterialList(lines=lines, total_mass_kg=round(b.total_mass_kg, 1))
+    if prices:
+        out.currency = prices.display_currency
+        out.subtotal = round(prices.display(b.subtotal), 2)
+        out.vat_rate = prices.vat_rate
+        out.total_incl_vat = round(prices.display(b.total), 2)
+        out.estimated_rate_families = b.uses_assumed_rates
+        out.price_note = (
+            f"INDICATIVE ONLY. Published {prices.origin} list rates read "
+            f"{prices.retrieved}, not a quote. Material only - no fabrication, "
+            f"coating, connections, transport or erection. "
+            + (f"Converted from {prices.currency} for {prices.country}. "
+               if prices.converted else "")
+            + ("Rates for " + ", ".join(b.uses_assumed_rates) + " are estimates "
+               "with no published list behind them. " if b.uses_assumed_rates else "")
+            + "Confirm with a supplier before ordering."
+        )
+    return out
+
+
+@mcp.tool(
+    name="propose_construction",
+    description=(
+        "Design a steel roof structure for a given span, length and snow load: "
+        "searches the profile catalogue for the lightest rafter/column/purlin "
+        "combination that satisfies every EN 1993-1-1 check and the deflection "
+        "limit. This is the tool for 'what do I need to build' as opposed to "
+        "check_roof's 'will this work'. Returns the proposed sections plus an "
+        "optional priced material list. Says so plainly if nothing in the "
+        "catalogue carries the load."
+    ),
+)
+def propose_construction(
+    span_m: float,
+    length_m: float,
+    pitch_deg: float = 20.0,
+    snow_depth_m: float | None = None,
+    snow_state: Literal["fresh", "settled", "old", "wet"] = "settled",
+    snow_kn_m2: float | None = None,
+    grade: Literal["S235", "S275", "S355", "S420", "S460"] = "S235",
+    eaves_height_m: float = 3.0,
+    frame_spacing_m: float = 5.0,
+    purlin_spacing_m: float = 1.5,
+    target_utilisation: float = 1.0,
+    include_prices: bool = False,
+    country: Literal["SK", "CZ"] = "SK",
+) -> Proposal:
+    if snow_kn_m2 is None:
+        if snow_depth_m is None:
+            raise ValueError("give either snow_depth_m or snow_kn_m2")
+        sk = loads.snow_from_depth(snow_depth_m, snow_state)
+        snow_kn_m2 = loads.roof_snow_load(sk, pitch_deg)[0].left
+
+    prices = bom.Prices.load(country=country) if include_prices else None
+    p = design.propose(
+        span=span_m, length=length_m, pitch_deg=pitch_deg, snow_kn_m2=snow_kn_m2,
+        grade=grade, target=target_utilisation, prices=prices,
+        eaves_height=eaves_height_m, frame_spacing=frame_spacing_m,
+        purlin_spacing=purlin_spacing_m,
+    )
+    out = Proposal(
+        ok=p.feasible, sections=p.sections,
+        utilisation=round(p.utilisation, 3),
+        deflection_utilisation=round(p.deflection_utilisation, 3),
+        governing_check=p.governing, total_mass_kg=round(p.mass_kg, 1),
+        combinations_tried=p.iterations,
+    )
+    if not p.feasible:
+        out.message = ("No combination in the catalogue carries this load. "
+                       "Reduce the span, add frames, or lower the load.")
+        return out
+    if include_prices:
+        out.materials = _material_list(p.construction, prices)
+    return out
+
+
+@mcp.tool(
+    name="material_list",
+    description=(
+        "Bill of materials for a roof: every member grouped by role, profile and "
+        "cut length, with quantities and mass. Set include_prices to add an "
+        "INDICATIVE cost - published Czech list rates, material only, not a "
+        "quote. Always repeat the price_note to the user; never present the "
+        "total as a firm price."
+    ),
+)
+def material_list(
+    span_m: float,
+    length_m: float,
+    pitch_deg: float = 20.0,
+    rafter: str = "IPE300",
+    column: str = "HEB200",
+    purlin: str = "SHS100x100x5",
+    grade: Literal["S235", "S275", "S355", "S420", "S460"] = "S235",
+    eaves_height_m: float = 3.0,
+    frame_spacing_m: float = 5.0,
+    purlin_spacing_m: float = 1.5,
+    snow_kn_m2: float = 2.0,
+    include_prices: bool = True,
+    country: Literal["SK", "CZ"] = "SK",
+    waste_percent: float = 0.0,
+) -> MaterialList:
+    con = pitched_roof(
+        span=span_m, length=length_m, pitch_deg=pitch_deg,
+        eaves_height=eaves_height_m, frame_spacing=frame_spacing_m,
+        purlin_spacing=purlin_spacing_m, rafter=rafter, column=column,
+        purlin=purlin, grade=grade, snow_kn_m2=snow_kn_m2,
+    )
+    prices = bom.Prices.load(country=country) if include_prices else None
+    b = bom.bill_of_materials(con, prices, waste=waste_percent / 100.0)
+    out = _material_list(con, prices)
+    out.total_mass_kg = round(b.total_mass_kg, 1)
+    return out
 
 
 @mcp.tool(

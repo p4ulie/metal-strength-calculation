@@ -23,12 +23,21 @@ buckling, not bending stress.
 To use the package (this repo):
 
 ```
-uv run python -m metal_strength.cli beam --span 6 --section IPE200 --udl 5
-uv run python -m metal_strength.cli roof --span 12 --length 20 --pitch 20 \
+uv run python -m metal_strength.cli beam   --span 6 --section IPE200 --udl 5
+uv run python -m metal_strength.cli roof   --span 12 --length 20 --pitch 20 \
     --snow-depth 1.0 --snow-state wet
-uv run python -m metal_strength.cli snow --depth 1.0 --state wet --pitch 20
+uv run python -m metal_strength.cli design --span 12 --length 20 --pitch 20 \
+    --snow-depth 1.0 --snow-state wet --cost      # proposes the sections
+uv run python -m metal_strength.cli snow   --depth 1.0 --state wet --pitch 20
 uv run python -m metal_strength.cli sections IPE300
 ```
+
+**`design` is the one to reach for when the user asks "what do I need?"** rather
+than "will this work?". It searches the catalogue for the lightest combination
+that passes every check, and says so plainly if nothing carries the load.
+
+Add `--bom` for a material list, `--cost` to price it, `--lang sk|cs` to
+translate the report, `--country SK|CZ` for the VAT rate and currency.
 
 Add `--show` to open the charts in windows, or `--out DIR` to save them as
 PNGs — the moment/shear diagrams, deflected shape, 3D utilisation plot and a
@@ -182,6 +191,25 @@ Radius of gyration `i = sqrt(I/A)`; for a rectangle about its weak axis,
 
 Common profiles are in `references/section-properties.md`; the full 567-profile
 catalogue is `metal_strength/sections.py` (`get_section("IPE300")`).
+
+## Quoting a price
+
+The package can price a material list, but be careful how you present it.
+
+- **Mass is exact** — section area x length x 7850 kg/m3. Quote it freely.
+- **Money is not.** The shipped rates are published Czech list prices read on a
+  single date; HEA, HEM and CHS are estimates with no published list behind
+  them at all. Say "indicative" every time, and say the rates are Czech if the
+  user is in Slovakia.
+- **Material only.** Fabrication, coating, connections, transport and erection
+  are not included and on a real building often exceed the steel cost. If a
+  user is budgeting, tell them this.
+- If the user has a supplier quote, `--prices quote.json` beats any default:
+  `{"currency": "EUR", "per_kg": {"IPE": 1.50, "default": 1.50}}`.
+
+Rough sanity check for a hand estimate: **structural steel is roughly
+€1.20-1.35/kg** ex VAT in SK/CZ for open profiles, a little less for hollow
+sections. A tonne of steel is therefore order-€1,300.
 
 ## Where a hand check stops being enough
 

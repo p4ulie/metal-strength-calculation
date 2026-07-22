@@ -1,0 +1,26 @@
+{
+  "origin": "CZ",
+  "_comment": "Indicative structural steel rates. VERIFY WITH YOUR SUPPLIER before ordering - these are a starting point, not a quote. Override with --prices your_list.json (same shape) to use a real quote.",
+  "currency": "CZK",
+  "retrieved": "2026-07-22",
+  "includes_vat": false,
+  "vat_rate": {"CZ": 0.21, "SK": 0.23},
+  "eur_per_unit": 0.0413,
+  "_eur_note": "EUR/CZK ~ 24.22 on 2026-07-22 (ECB reference). Rates move daily; override with --fx.",
+  "per_kg": {
+    "IPE":  {"rate": 30.0, "basis": "measured", "note": "12 profiles IPE80-IPE330 spanned 29.4-31.0 Kc/kg"},
+    "HEA":  {"rate": 31.0, "basis": "assumed",  "note": "no published list found; taken as HEB"},
+    "HEB":  {"rate": 31.0, "basis": "measured", "note": "12 profiles HEB100-HEB320 spanned 28.8-31.6 Kc/kg"},
+    "HEM":  {"rate": 33.0, "basis": "assumed",  "note": "no published list found; heavier rolling, taken ~6% over HEB"},
+    "SHS":  {"rate": 22.9, "basis": "measured", "note": "hollow section (jekl), 1st quality, flat rate"},
+    "RHS":  {"rate": 22.9, "basis": "measured", "note": "hollow section (jekl), 1st quality, flat rate"},
+    "CHS":  {"rate": 28.0, "basis": "assumed",  "note": "no published list found; between hollow and open sections"},
+    "default": {"rate": 30.0, "basis": "assumed", "note": "fallback for anything not listed"}
+  },
+  "sources": [
+    {"what": "IPE per-metre prices and weights", "url": "https://www.mzhutni.cz/ipe-c80/", "read": "2026-07-22"},
+    {"what": "HEB per-kg prices and weights", "url": "https://www.mzhutni.cz/heb-c84/", "read": "2026-07-22"},
+    {"what": "hollow section (jekl) per-kg price list", "url": "https://www.levny-hutni-material.cz/cenik/ocelove-jekly/", "read": "2026-07-22"},
+    {"what": "VAT rates CZ 21% / SK 23%", "url": "https://www.vatcalc.com/slovakia/slovakia-2026-vat-update/", "read": "2026-07-22"}
+  ]
+}

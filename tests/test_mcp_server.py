@@ -13,7 +13,7 @@ from metal_strength import mcp_server as srv
 EXPECTED_TOOLS = {
     "snow_load_from_depth", "snow_load_eurocode", "list_sections",
     "section_properties", "check_beam", "check_rod_buckling", "check_roof",
-    "solve_frame", "render_snow_cases",
+    "solve_frame", "render_snow_cases", "propose_construction", "material_list",
 }
 
 

@@ -7,9 +7,32 @@ import sys
 import tempfile
 from pathlib import Path
 
-from . import loads, viz
+from . import bom as bom_mod
+from . import design as design_mod
+from . import i18n, loads, viz
 from .model import pitched_roof, single_beam
 from .sections import get_section, list_sections
+
+
+def _materials(construction, a) -> None:
+    """Print the material list, and the cost when a price list is in play."""
+    prices = None
+    if getattr(a, "prices", None) or getattr(a, "cost", False):
+        prices = bom_mod.Prices.load(getattr(a, "prices", None),
+                                     country=a.country, fx=getattr(a, "fx", None))
+    b = bom_mod.bill_of_materials(construction, prices, waste=a.waste / 100.0)
+    print(f"\n{i18n.t('material_list', a.lang)}")
+    print(bom_mod.format_bom(b, a.lang))
+
+
+def _snow_for(a, parser) -> float:
+    """Roof snow load in kN/m2 from either --snow or --snow-depth."""
+    if a.snow is not None:
+        return a.snow
+    if a.snow_depth is None:
+        parser.error("give either --snow or --snow-depth")
+    sk = loads.snow_from_depth(a.snow_depth, a.snow_state)
+    return loads.roof_snow_load(sk, a.pitch)[0].left
 
 
 def _report(roof, out: Path | None, prefix: str, show: bool = False,
@@ -123,6 +146,47 @@ def main(argv: list[str] | None = None) -> int:
     roof.add_argument("--show", action="store_true",
                       help="open the charts in windows as well as saving them")
 
+    design = sub.add_parser(
+        "design", help="propose a construction that carries a given load")
+    design.add_argument("--span", type=float, required=True, help="metres")
+    design.add_argument("--length", type=float, required=True, help="metres")
+    design.add_argument("--pitch", type=float, default=20.0, help="degrees")
+    design.add_argument("--eaves-height", type=float, default=3.0)
+    design.add_argument("--frame-spacing", type=float, default=5.0)
+    design.add_argument("--purlin-spacing", type=float, default=1.5)
+    design.add_argument("--grade", default="S235")
+    design.add_argument("--snow-depth", type=float, help="metres of snow")
+    design.add_argument("--snow-state", default="settled",
+                        choices=sorted(loads.SNOW_DENSITY))
+    design.add_argument("--snow", type=float, help="roof snow load in kN/m2 directly")
+    design.add_argument("--target", type=float, default=1.0,
+                        help="utilisation to design to; 0.85 leaves headroom")
+    design.add_argument("--objective", default="mass", choices=["mass", "cost"])
+    design.add_argument("--rafter-family", default="IPE",
+                        choices=["IPE", "HEA", "HEB"])
+    design.add_argument("--column-family", default="HEB",
+                        choices=["HEB", "HEA", "IPE"])
+    design.add_argument("--purlin-family", default="SHS",
+                        choices=["SHS", "RHS", "IPE"])
+    design.add_argument("--out", type=Path)
+    design.add_argument("--show", action="store_true",
+                        help="open the proposal in the interactive dashboard")
+
+    for sub_p in (beam, roof, design):
+        sub_p.add_argument("--lang", default="en", choices=list(i18n.LANGUAGES),
+                           help="language for the material list and verdict")
+        sub_p.add_argument("--bom", action="store_true", help="print the material list")
+        sub_p.add_argument("--cost", action="store_true",
+                           help="price the material list (implies --bom)")
+        sub_p.add_argument("--prices", type=Path,
+                           help="JSON price list to use instead of the shipped rates")
+        sub_p.add_argument("--country", default="SK", choices=["SK", "CZ"],
+                           help="sets the VAT rate and the display currency")
+        sub_p.add_argument("--fx", type=float,
+                           help="EUR per unit of the price list currency")
+        sub_p.add_argument("--waste", type=float, default=0.0,
+                           help="off-cut allowance in percent")
+
     sect = sub.add_parser("sections", help="catalogue lookup")
     sect.add_argument("name", nargs="?", help="profile name; omit to list a family")
     sect.add_argument("--family", default=None)
@@ -174,18 +238,44 @@ def main(argv: list[str] | None = None) -> int:
               + (f", point {a.point} kN" if a.point else "")
               + (", laterally restrained" if a.restrained else ""))
         _report(roof_obj, a.out, "beam", a.show)
+        if a.bom or a.cost:
+            _materials(roof_obj, a)
         return 0
 
-    if a.snow is not None:
-        snow_load = a.snow
-        origin = f"{a.snow:.2f} kN/m2 given directly"
-    elif a.snow_depth is not None:
-        sk = loads.snow_from_depth(a.snow_depth, a.snow_state)
-        snow_load = loads.roof_snow_load(sk, a.pitch)[0].left
-        origin = (f"{a.snow_depth:.2f} m {a.snow_state} snow -> sk {sk:.2f} -> "
-                  f"roof {snow_load:.2f} kN/m2")
-    else:
-        p.error("give either --snow or --snow-depth")
+    if a.cmd == "design":
+        snow = _snow_for(a, p)
+        print(f"designing a {a.span} x {a.length} m roof at {a.pitch}deg, "
+              f"{a.grade}, snow {snow:.2f} kN/m2, target utilisation {a.target}")
+        prices = None
+        if a.objective == "cost" or a.cost or a.prices:
+            prices = bom_mod.Prices.load(a.prices, country=a.country, fx=a.fx)
+        proposal = design_mod.propose(
+            span=a.span, length=a.length, pitch_deg=a.pitch, snow_kn_m2=snow,
+            grade=a.grade, target=a.target, objective=a.objective, prices=prices,
+            families={"rafter": a.rafter_family, "column": a.column_family,
+                      "purlin": a.purlin_family},
+            eaves_height=a.eaves_height, frame_spacing=a.frame_spacing,
+            purlin_spacing=a.purlin_spacing,
+        )
+        print()
+        print(design_mod.format_proposal(proposal, a.lang))
+        if not proposal.feasible:
+            return 1
+        if a.bom or a.cost or a.prices:
+            _materials(proposal.construction, a)
+        if a.out or a.show:
+            _report(proposal.construction, a.out, "design", a.show, live=dict(
+                span=a.span, length=a.length, pitch_deg=a.pitch,
+                eaves_height=a.eaves_height, frame_spacing=a.frame_spacing,
+                purlin_spacing=a.purlin_spacing, grade=a.grade,
+                snow_depth=a.snow_depth if a.snow_depth is not None else 1.0,
+                snow_state=a.snow_state, **proposal.sections))
+        print(f"\n{i18n.t('disclaimer', a.lang)}")
+        return 0
+
+    snow_load = _snow_for(a, p)
+    origin = (f"{a.snow:.2f} kN/m2 given directly" if a.snow is not None
+              else f"{a.snow_depth:.2f} m {a.snow_state} snow -> {snow_load:.2f} kN/m2")
 
     print(f"roof {a.span} x {a.length} m at {a.pitch}deg; {origin}; case {a.case}")
     roof_obj = pitched_roof(
@@ -201,6 +291,8 @@ def main(argv: list[str] | None = None) -> int:
         snow_depth=a.snow_depth if a.snow_depth is not None else 1.0,
         snow_state=a.snow_state, snow_case=a.case,
     ))
+    if a.bom or a.cost:
+        _materials(roof_obj, a)
     return 0
 
 

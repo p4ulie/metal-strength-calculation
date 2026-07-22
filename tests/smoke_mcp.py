@@ -34,6 +34,13 @@ CALLS: list[tuple[str, dict]] = [
         "supports": {"0": "pinned", "3": "pinned"},
         "member_loads": [{"member": 1, "udl_z": 10.0}],
     }}),
+    ("propose_construction", {"span_m": 12.0, "length_m": 20.0, "pitch_deg": 20.0,
+                              "snow_depth_m": 1.0, "snow_state": "wet",
+                              "include_prices": True, "country": "SK"}),
+    ("material_list", {"span_m": 12.0, "length_m": 20.0, "pitch_deg": 20.0,
+                       "rafter": "IPE450", "column": "HEB240",
+                       "purlin": "SHS140x140x5", "include_prices": True,
+                       "waste_percent": 5.0}),
     ("render_snow_cases", {"sk_kn_m2": 2.0, "pitch_deg": 25.0}),
 ]
 
