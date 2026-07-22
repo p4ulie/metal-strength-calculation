@@ -1,89 +1,115 @@
 """Report labels in English, Slovak and Czech.
 
-Only user-facing report text is translated. Eurocode clause numbers, profile
-names and check names stay as they are -- they are the same in every language
-and an engineer looking for "6.3.3 eq 6.62" wants exactly that string.
+What is translated: everything the reader is meant to read as prose -- column
+headings, roles, verdicts, warnings.
+
+What is not, deliberately:
+
+* **Profile designations** (``IPE400``, ``HEB240``, ``SHS100x10``) are EN
+  standard names. A Slovak or Czech merchant sells an IPE 400 as an IPE 400.
+* **Steel grades** (``S235``) are EN 10025 designations, likewise.
+* **Clause numbers** (``6.3.3 eq 6.62``) and **check names** are how an
+  engineer cross-references the Eurocode; translating them would make the
+  report harder to check, not easier.
 """
 
 from __future__ import annotations
 
 LANGUAGES = ("en", "sk", "cs")
 
+# Component roles. The English key is the internal identifier used in code and
+# in member tags; these are the display forms.
+ROLES: dict[str, dict[str, str]] = {
+    "rafter": {"en": "rafter", "sk": "krokva", "cs": "krokev"},
+    "column": {"en": "column", "sk": "stĺp", "cs": "sloup"},
+    "purlin": {"en": "purlin", "sk": "väznica", "cs": "vaznice"},
+    "beam": {"en": "beam", "sk": "nosník", "cs": "nosník"},
+    "brace": {"en": "brace", "sk": "stuženie", "cs": "ztužení"},
+    "tie": {"en": "tie", "sk": "tiahlo", "cs": "táhlo"},
+}
+
 MESSAGES: dict[str, dict[str, str]] = {
     # -- material list columns
     "role": {"en": "role", "sk": "prvok", "cs": "prvek"},
     "profile": {"en": "profile", "sk": "profil", "cs": "profil"},
-    "grade": {"en": "grade", "sk": "akost", "cs": "jakost"},
+    "grade": {"en": "grade", "sk": "akosť", "cs": "jakost"},
     "qty": {"en": "qty", "sk": "ks", "cs": "ks"},
-    "length_each": {"en": "length [m]", "sk": "dlzka [m]", "cs": "delka [m]"},
+    "length_each": {"en": "length [m]", "sk": "dĺžka [m]", "cs": "délka [m]"},
     "total_length": {"en": "total [m]", "sk": "spolu [m]", "cs": "celkem [m]"},
-    "mass_each": {"en": "mass [kg]", "sk": "hmotn [kg]", "cs": "hmotn [kg]"},
+    "mass_each": {"en": "mass [kg]", "sk": "hmotn. [kg]", "cs": "hmotn. [kg]"},
     "total_mass": {"en": "total [kg]", "sk": "spolu [kg]", "cs": "celkem [kg]"},
     "rate": {"en": "rate", "sk": "cena", "cs": "cena"},
-    "cost": {"en": "cost", "sk": "naklady", "cs": "naklady"},
+    "cost": {"en": "cost", "sk": "náklady", "cs": "náklady"},
     "total": {"en": "total", "sk": "spolu", "cs": "celkem"},
     # -- money
-    "subtotal": {"en": "material, ex VAT", "sk": "material bez DPH",
-                 "cs": "material bez DPH"},
+    "subtotal": {"en": "material, ex VAT", "sk": "materiál bez DPH",
+                 "cs": "materiál bez DPH"},
     "vat": {"en": "VAT", "sk": "DPH", "cs": "DPH"},
     "total_incl_vat": {"en": "total incl. VAT", "sk": "spolu s DPH",
                        "cs": "celkem s DPH"},
     "incl_waste": {"en": "includes off-cut allowance of",
-                   "sk": "vratane odpadu", "cs": "vcetne odpadu"},
+                   "sk": "vrátane odpadu", "cs": "včetně odpadu"},
     "price_warning": {
         "en": "INDICATIVE PRICES - published list rates, not a quote. "
               "Confirm with your supplier before ordering.",
-        "sk": "ORIENTACNE CENY - zverejnene cenniky, nie ponuka. "
-              "Pred objednanim overte u dodavatela.",
-        "cs": "ORIENTACNI CENY - zverejnene ceniky, nikoli nabidka. "
-              "Pred objednanim overte u dodavatele.",
+        "sk": "ORIENTAČNÉ CENY - zverejnené cenníky, nie ponuka. "
+              "Pred objednaním overte u dodávateľa.",
+        "cs": "ORIENTAČNÍ CENY - zveřejněné ceníky, nikoli nabídka. "
+              "Před objednáním ověřte u dodavatele.",
     },
     "converted_rates": {
         "en": "rates published in {origin}, converted for {country} "
               "at the exchange rate above - a {country} supplier may quote differently",
-        "sk": "ceny zverejnene v {origin}, prepocitane pre {country} kurzom vyssie - "
-              "dodavatel v {country} moze ponuknut inu cenu",
-        "cs": "ceny zverejnene v {origin}, prepoctene pro {country} kurzem vyse - "
-              "dodavatel v {country} muze nabidnout jinou cenu",
+        "sk": "ceny zverejnené v {origin}, prepočítané pre {country} kurzom vyššie - "
+              "dodávateľ v {country} môže ponúknuť inú cenu",
+        "cs": "ceny zveřejněné v {origin}, přepočtené pro {country} kurzem výše - "
+              "dodavatel v {country} může nabídnout jinou cenu",
     },
-    "rates_read": {"en": "rates read on", "sk": "ceny zistene dna",
-                   "cs": "ceny zjisteny dne"},
+    "rates_read": {"en": "rates read on", "sk": "ceny zistené dňa",
+                   "cs": "ceny zjištěny dne"},
     "assumed_rates": {"en": "estimated, no published list found for",
-                      "sk": "odhadnute, bez zverejneneho cennika pre",
-                      "cs": "odhadnute, bez zverejneneho ceniku pro"},
+                      "sk": "odhadnuté, bez zverejneného cenníka pre",
+                      "cs": "odhadnuté, bez zveřejněného ceníku pro"},
+    "material_only": {
+        "en": "material only - no fabrication, coating, connections or erection",
+        "sk": "iba materiál - bez výroby, náterov, spojov a montáže",
+        "cs": "pouze materiál - bez výroby, nátěrů, spojů a montáže",
+    },
     # -- verdict
     "passes": {"en": "PASSES", "sk": "VYHOVUJE", "cs": "VYHOVUJE"},
     "fails": {"en": "FAILS", "sk": "NEVYHOVUJE", "cs": "NEVYHOVUJE"},
-    "utilisation": {"en": "utilisation", "sk": "vyuzitie", "cs": "vyuziti"},
-    "governing": {"en": "governing check", "sk": "rozhodujuci posudok",
-                  "cs": "rozhodujici posudek"},
-    "deflection": {"en": "deflection", "sk": "priehyb", "cs": "pruhyb"},
-    "members": {"en": "members", "sk": "prvkov", "cs": "prvku"},
-    "worst_members": {"en": "worst members", "sk": "najviac zatazene prvky",
-                      "cs": "nejvice zatizene prvky"},
-    "material_list": {"en": "MATERIAL LIST", "sk": "VYKAZ MATERIALU",
-                      "cs": "VYKAZ MATERIALU"},
+    "utilisation": {"en": "utilisation", "sk": "využitie", "cs": "využití"},
+    "governing": {"en": "governing check", "sk": "rozhodujúci posudok",
+                  "cs": "rozhodující posudek"},
+    "deflection": {"en": "deflection", "sk": "priehyb", "cs": "průhyb"},
+    "members": {"en": "members", "sk": "prvkov", "cs": "prvků"},
+    "worst_members": {"en": "worst members", "sk": "najviac zaťažené prvky",
+                      "cs": "nejvíce zatížené prvky"},
+    "material_list": {"en": "MATERIAL LIST", "sk": "VÝKAZ MATERIÁLU",
+                      "cs": "VÝKAZ MATERIÁLU"},
     # -- design solver
-    "proposal": {"en": "PROPOSED CONSTRUCTION", "sk": "NAVRHNUTA KONSTRUKCIA",
-                 "cs": "NAVRZENA KONSTRUKCE"},
-    "searched": {"en": "sections tried", "sk": "skusenych variantov",
-                 "cs": "zkousenych variant"},
+    "proposal": {"en": "PROPOSED CONSTRUCTION", "sk": "NAVRHNUTÁ KONŠTRUKCIA",
+                 "cs": "NAVRŽENÁ KONSTRUKCE"},
+    "searched": {"en": "sections tried", "sk": "skúšaných variantov",
+                 "cs": "zkoušených variant"},
     "infeasible": {
         "en": "No combination in the catalogue carries this load. "
               "Reduce the span, add frames, or lower the load.",
-        "sk": "Ziadna kombinacia z katalogu toto zatazenie neunesie. "
-              "Zmenste rozpatie, pridajte ramy alebo znizte zatazenie.",
-        "cs": "Zadna kombinace z katalogu toto zatizeni neunese. "
-              "Zmenste rozpeti, pridejte ramy nebo snizte zatizeni.",
+        "sk": "Žiadna kombinácia z katalógu toto zaťaženie neunesie. "
+              "Zmenšite rozpätie, pridajte rámy alebo znížte zaťaženie.",
+        "cs": "Žádná kombinace z katalogu toto zatížení neunese. "
+              "Zmenšete rozpětí, přidejte rámy nebo snižte zatížení.",
     },
+    "best_reached": {"en": "best reached", "sk": "najlepšie dosiahnuté",
+                     "cs": "nejlépe dosaženo"},
     "disclaimer": {
         "en": "Indicative Eurocode check. Not a substitute for a licensed "
               "structural engineer. Wind, connections and second-order effects "
               "are not covered.",
-        "sk": "Orientacny posudok podla Eurokodu. Nenahradza autorizovaneho "
-              "statika. Vietor, spoje a teoria II. radu nie su zahrnute.",
-        "cs": "Orientacni posudek podle Eurokodu. Nenahrazuje autorizovaneho "
-              "statika. Vitr, spoje a teorie II. radu nejsou zahrnuty.",
+        "sk": "Orientačný posudok podľa Eurokódu. Nenahrádza autorizovaného "
+              "statika. Vietor, spoje a teória II. rádu nie sú zahrnuté.",
+        "cs": "Orientační posudek podle Eurokódu. Nenahrazuje autorizovaného "
+              "statika. Vítr, spoje a teorie II. řádu nejsou zahrnuty.",
     },
 }
 
@@ -94,6 +120,29 @@ def t(key: str, lang: str = "en") -> str:
     if entry is None:
         return key
     return entry.get(lang, entry.get("en", key))
+
+
+def role(name: str, lang: str = "en") -> str:
+    """Translate a component role. Anything unrecognised is passed through.
+
+    Profile names arrive here when a member has no role tag (``IPE200`` for a
+    plain beam), and those must not be touched.
+    """
+    entry = ROLES.get(name.lower())
+    return entry.get(lang, entry["en"]) if entry else name
+
+
+def translate_tag(tag: str, lang: str = "en") -> str:
+    """Translate the role word at the front of a member tag.
+
+    ``column R f1`` -> ``stĺp R f1``. The suffix is a position identifier and
+    stays put so it still matches the model.
+    """
+    if not tag:
+        return tag
+    head, _, rest = tag.partition(" ")
+    translated = role(head, lang)
+    return f"{translated} {rest}".rstrip() if rest else translated
 
 
 def verdict(ok: bool, lang: str = "en") -> str:

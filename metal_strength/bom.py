@@ -191,6 +191,7 @@ def bill_of_materials(construction: Construction, prices: Prices | None = None,
 
 def format_bom(bom: BillOfMaterials, lang: str = "en", show_prices: bool = True) -> str:
     """Render the material list as a table."""
+    from .i18n import role as tr_role
     from .i18n import t
 
     has_money = show_prices and bom.prices is not None
@@ -199,14 +200,14 @@ def format_bom(bom: BillOfMaterials, lang: str = "en", show_prices: bool = True)
     head = [t("role", lang), t("profile", lang), t("grade", lang), t("qty", lang),
             t("length_each", lang), t("total_length", lang), t("mass_each", lang),
             t("total_mass", lang)]
-    widths = [12, 14, 6, 5, 10, 11, 10, 11]
+    widths = [12, 14, 7, 5, 11, 11, 11, 11]
     if has_money:
         head += [f"{t('rate', lang)} [{cur}/kg]", f"{t('cost', lang)} [{cur}]"]
         widths += [13, 13]
 
     rows = []
     for line in bom.lines:
-        row = [line.role, line.section, line.grade, str(line.count),
+        row = [tr_role(line.role, lang), line.section, line.grade, str(line.count),
                f"{line.length_each_m:.3f}", f"{line.total_length_m:.2f}",
                f"{line.mass_each_kg:.1f}", f"{line.total_mass_kg:.1f}"]
         if has_money:
@@ -246,6 +247,7 @@ def format_bom(bom: BillOfMaterials, lang: str = "en", show_prices: bool = True)
         out.append(f"  {t('total_incl_vat', lang):<22s} {both(bom.total)}")
         out.append("")
         out.append(f"  ! {t('price_warning', lang)}")
+        out.append(f"    {t('material_only', lang)}")
         if p.retrieved:
             out.append(f"    {t('rates_read', lang)} {p.retrieved}")
         if p.converted:

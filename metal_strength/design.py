@@ -188,25 +188,40 @@ def _cost_of(name: str, prices) -> float:
     return s.mass_per_m * prices.rate(_family_of(name))
 
 
+def _governing_text(governing: str, lang: str) -> str:
+    """Translate the role word inside a governing-member string.
+
+    ``[11] column R f1 combined N+M (6.62)`` keeps its index and its check name
+    -- the check name maps to a Eurocode clause and must stay searchable.
+    """
+    from .i18n import translate_tag
+
+    head, sep, rest = governing.partition("] ")
+    return f"{head}{sep}{translate_tag(rest, lang)}" if sep else translate_tag(governing, lang)
+
+
 def format_proposal(p: Proposal, lang: str = "en") -> str:
     """Render a proposal as a readable block."""
-    from .i18n import t, verdict
+    from .i18n import role as tr_role
+    from .i18n import t, translate_tag, verdict
 
     if not p.feasible:
         return (f"{t('proposal', lang)}: {t('fails', lang)}\n"
                 f"  {t('infeasible', lang)}\n"
                 f"  {t('searched', lang)}: {p.iterations}\n"
-                f"  best reached {max(p.utilisation, p.deflection_utilisation):.2f} "
-                f"with {', '.join(f'{k}={v}' for k, v in p.sections.items())}")
+                f"  {t('best_reached', lang)} "
+                f"{max(p.utilisation, p.deflection_utilisation):.2f} "
+                f"with {', '.join(f'{tr_role(k, lang)}={v}' for k, v in p.sections.items())}")
 
     lines = [f"{t('proposal', lang)}   {verdict(p.ok, lang)}", ""]
-    for role, name in p.sections.items():
+    for role_key, name in p.sections.items():
         s = get_section(name)
-        lines.append(f"  {role:<10s} {name:<16s} {s.mass_per_m:6.1f} kg/m")
+        lines.append(f"  {tr_role(role_key, lang):<12s} {name:<16s} "
+                     f"{s.mass_per_m:6.1f} kg/m")
     lines += [
         "",
         f"  {t('utilisation', lang):<18s} {p.utilisation:.2f}   "
-        f"({t('governing', lang)}: {p.governing})",
+        f"({t('governing', lang)}: {_governing_text(p.governing, lang)})",
         f"  {t('deflection', lang):<18s} {p.deflection_utilisation:.2f}",
         f"  {t('total_mass', lang):<18s} {p.mass_kg:,.0f} kg",
         f"  {t('searched', lang):<18s} {p.iterations}",

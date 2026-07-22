@@ -112,9 +112,9 @@ def test_vat_and_currency_follow_the_country(roof):
 def test_slovak_output_says_the_rates_were_converted(roof):
     text = format_bom(bill_of_materials(roof, Prices.load(country="SK")), "sk")
     assert "EUR" in text and "CZK" in text
-    assert "prepocitane pre SK" in text, "must disclose the rates are Czech"
+    assert "prepočítané pre SK" in text, "must disclose the rates are Czech"
     # Czech output has nothing to disclose.
-    assert "prepoct" not in format_bom(
+    assert "prepočítané" not in format_bom(
         bill_of_materials(roof, Prices.load(country="CZ")), "cs")
 
 
@@ -170,8 +170,13 @@ def test_translated_bom_differs_from_english(roof):
     b = bill_of_materials(roof, Prices.load())
     en, sk, cs = (format_bom(b, x) for x in ("en", "sk", "cs"))
     assert en != sk and en != cs and sk != cs
-    assert "VYKAZ" not in en
-    assert "ORIENTACNE CENY" in sk and "ORIENTACNI CENY" in cs
+    assert "VÝKAZ" not in en
+    assert "ORIENTAČNÉ CENY" in sk and "ORIENTAČNÍ CENY" in cs
+    # Roles are translated; EN profile designations and grades are not.
+    assert "krokva" in sk and "stĺp" in sk and "väznica" in sk
+    assert "krokev" in cs and "sloup" in cs and "vaznice" in cs
+    for text in (en, sk, cs):
+        assert "IPE450" in text and "HEB240" in text and "S235" in text
 
 
 # --- the design solver ------------------------------------------------------
@@ -272,8 +277,10 @@ def test_cost_objective_uses_the_price_list():
 def test_format_proposal_is_translated():
     p = design.propose(span=10.0, length=15.0, snow_kn_m2=2.0)
     assert "PROPOSED CONSTRUCTION" in design.format_proposal(p, "en")
-    assert "NAVRHNUTA KONSTRUKCIA" in design.format_proposal(p, "sk")
-    assert "NAVRZENA KONSTRUKCE" in design.format_proposal(p, "cs")
+    assert "NAVRHNUTÁ KONŠTRUKCIA" in design.format_proposal(p, "sk")
+    assert "NAVRŽENÁ KONSTRUKCE" in design.format_proposal(p, "cs")
+    sk = design.format_proposal(p, "sk")
+    assert "krokva" in sk and "rafter" not in sk
 
 
 # --- CLI --------------------------------------------------------------------

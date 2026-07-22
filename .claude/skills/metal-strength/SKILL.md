@@ -39,6 +39,11 @@ that passes every check, and says so plainly if nothing carries the load.
 Add `--bom` for a material list, `--cost` to price it, `--lang sk|cs` to
 translate the report, `--country SK|CZ` for the VAT rate and currency.
 
+`--lang` translates component roles (rafter → krokva → krokev) and all report
+prose. It does **not** translate profile designations (`IPE400`), steel grades
+(`S235`) or Eurocode clause numbers — those are EN standard identifiers and are
+the same in Slovak and Czech. Do not "translate" them when relaying a result.
+
 Add `--show` to open the charts in windows, or `--out DIR` to save them as
 PNGs — the moment/shear diagrams, deflected shape, 3D utilisation plot and a
 ranked bar chart of the worst members. Reach for a chart when the user asks

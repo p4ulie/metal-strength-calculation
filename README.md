@@ -46,11 +46,11 @@ uv run python -m metal_strength.cli design --span 12 --length 20 --pitch 20 \
 ```
 
 ```
-NAVRHNUTA KONSTRUKCIA   VYHOVUJE
-  rafter     IPE400    66.3 kg/m
-  column     HEB240    83.2 kg/m
-  purlin     SHS100x10 27.4 kg/m
-  vyuzitie   0.96   priehyb 0.62   spolu 11,665 kg
+NAVRHNUTÁ KONŠTRUKCIA   VYHOVUJE
+  krokva    IPE400    66.3 kg/m
+  stĺp      HEB240    83.2 kg/m
+  väznica   SHS100x10 27.4 kg/m
+  využitie  0.96   priehyb 0.62   spolu 11,665 kg
 ```
 
 The solver starts from the smallest profile in each family and raises whichever
@@ -65,13 +65,19 @@ something undersized.
 `--bom` prints the material list, `--cost` prices it:
 
 ```
-prvok      profil      akost  ks  dlzka [m]  spolu [kg]  cena [CZK/kg]  naklady [CZK]
-purlin     SHS100x10   S235   36      5.000      4935.2          22.90        118,666
-rafter     IPE400      S235   40      1.596      4232.8          30.00        133,335
-column     HEB240      S235   10      3.000      2496.0          31.00         81,244
-material bez DPH   13,763.00 EUR  (333,245 CZK)
-DPH 23% (SK)        3,165.49 EUR
+prvok      profil      akosť  ks  dĺžka [m]  spolu [kg]  cena [CZK/kg]  náklady [CZK]
+väznica    SHS100x10   S235   36      5.000      4935.2          22.90        118,666
+krokva     IPE400      S235   40      1.597      4235.5          30.00        133,418
+stĺp       HEB240      S235   10      3.000      2496.0          31.00         81,244
+materiál bez DPH   13,766.45 EUR  (333,328 CZK)
+DPH 23% (SK)        3,166.28 EUR
 ```
+
+Component roles are translated (rafter → krokva → krokev). **Profile
+designations and steel grades are not** — `IPE400`, `HEB240`, `S235` are EN
+standard names, and a Slovak merchant sells an IPE 400 as an IPE 400. Eurocode
+clause numbers and check names stay in English too, so the report remains
+cross-referenceable against the standard.
 
 `--lang en|sk|cs` translates the report, `--country SK|CZ` sets the VAT rate
 (23% / 21%) and the display currency, `--waste 5` adds an off-cut allowance,

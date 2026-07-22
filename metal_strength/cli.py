@@ -55,20 +55,24 @@ def _report(roof, out: Path | None, prefix: str, show: bool = False,
     defl = roof.deflection(results)
     worst_index = checks.index(worst)
 
-    print(f"\n{len(roof.spec.members)} members, {len(roof.spec.nodes)} nodes")
-    print(f"\nworst 5 members:")
+    lang = getattr(roof, "_lang", "en")
+    print(f"\n{len(roof.spec.members)} {i18n.t('members', lang)}, "
+          f"{len(roof.spec.nodes)} nodes")
+    print(f"\n{i18n.t('worst_members', lang)}:")
     for c in ranked[:5]:
         flag = "OK  " if c.ok else "FAIL"
-        print(f"  {flag} {c.utilisation:5.2f}  {c.section:<24s} {c.governing.name}")
+        head, sep, rest = c.section.partition("] ")
+        label = f"{head}{sep}{i18n.translate_tag(rest, lang)}" if sep else c.section
+        print(f"  {flag} {c.utilisation:5.2f}  {label:<24s} {c.governing.name}")
 
     print()
     print(worst.report())
     print(f"\nserviceability:\n{defl}")
 
     ok = all(c.ok for c in checks) and defl.ok
-    verdict = "PASSES" if ok else "FAILS"
-    print(f"\n=> the structure {verdict} "
-          f"(strength {worst.utilisation:.2f}, deflection {defl.utilisation:.2f})")
+    print(f"\n=> {i18n.verdict(ok, lang)} "
+          f"({i18n.t('utilisation', lang)} {worst.utilisation:.2f}, "
+          f"{i18n.t('deflection', lang)} {defl.utilisation:.2f})")
 
     if out:
         # Separate PNGs, which is what you want for a report.
@@ -237,6 +241,7 @@ def main(argv: list[str] | None = None) -> int:
               + (f", UDL {a.udl} kN/m" if a.udl else "")
               + (f", point {a.point} kN" if a.point else "")
               + (", laterally restrained" if a.restrained else ""))
+        roof_obj._lang = a.lang
         _report(roof_obj, a.out, "beam", a.show)
         if a.bom or a.cost:
             _materials(roof_obj, a)
@@ -264,6 +269,7 @@ def main(argv: list[str] | None = None) -> int:
         if a.bom or a.cost or a.prices:
             _materials(proposal.construction, a)
         if a.out or a.show:
+            proposal.construction._lang = a.lang
             _report(proposal.construction, a.out, "design", a.show, live=dict(
                 span=a.span, length=a.length, pitch_deg=a.pitch,
                 eaves_height=a.eaves_height, frame_spacing=a.frame_spacing,
@@ -284,6 +290,7 @@ def main(argv: list[str] | None = None) -> int:
         rafter=a.rafter, column=a.column, purlin=a.purlin, grade=a.grade,
         snow_kn_m2=snow_load, snow_case=a.case,
     )
+    roof_obj._lang = a.lang
     _report(roof_obj, a.out, "roof", a.show, live=dict(
         span=a.span, length=a.length, pitch_deg=a.pitch, eaves_height=a.eaves_height,
         frame_spacing=a.frame_spacing, purlin_spacing=a.purlin_spacing,
