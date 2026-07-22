@@ -637,7 +637,9 @@ def dashboard(
         return cache[key]
 
     # -- controls -------------------------------------------------------------
-    ax_depth = fig.add_axes([0.13, 0.115, 0.28, 0.025])
+    # x starts clear of the shape radio (which ends at 0.115) plus room for this
+    # slider's own label, which matplotlib draws to its left.
+    ax_depth = fig.add_axes([0.22, 0.115, 0.19, 0.025])
     s_depth = Slider(ax_depth, _L("snow_depth"), 0.0, 3.0,
                      valinit=S["snow_depth_m"], valstep=0.05, color="#90caf9")
 

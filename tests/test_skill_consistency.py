@@ -262,3 +262,16 @@ def test_the_docs_do_not_offer_flags_that_were_removed():
         assert "--http" not in text, path
         assert "--live" not in text, path
         assert "metal_strength.viewer" not in text, path
+
+
+def test_every_readme_image_exists():
+    """A broken image is worse than no image: it looks like rot."""
+    import re
+
+    readme = Path("README.md").read_text()
+    referenced = re.findall(r"!\[[^\]]*\]\(([^)]+)\)", readme, re.S)
+    assert referenced, "the README is meant to show the thing, not only describe it"
+    for relative in referenced:
+        image = Path(relative)
+        assert image.exists(), relative
+        assert image.stat().st_size > 5_000, f"{relative} looks empty"

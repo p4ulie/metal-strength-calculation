@@ -21,6 +21,12 @@ well as writing the PNGs:
 uv run python -m metal_strength.cli beam --span 6 --section IPE200 --udl 5 --show
 ```
 
+![The dashboard: 3D utilisation, ranked members, deflected shape, force
+diagrams, and the controls that re-solve them](docs/images/dashboard.png)
+
+*`./ms` — drag a slider or a radio and the frame re-solves; the same window is
+what `tune_roof` drives over MCP.*
+
 ## What it does
 
 | Layer | Module | Basis |
@@ -60,6 +66,8 @@ uv run python -m metal_strength.cli roof --span 30 --length 20 --pitch 15 \
     --shape multispan --case valley_drift --snow-depth 1.0 --snow-state wet
 ```
 
+![The seven presets, plus a hand-drawn arch](docs/images/shapes.png)
+
 `--pitch` always means the *upper* slope, so a mansard's steep lower slope and a
 sawtooth's return face are set by the shape, not by you. Snow slides off both of
 them: above 60 degrees mu is zero (EN 1991-1-3 Table 5.2), which the model
@@ -76,6 +84,12 @@ The Eurocode gives no shape coefficient for a mansard, a gambrel or a
 hand-drawn profile. Those get mu from each slope's own pitch and every report,
 chart and MCP response says so. Have the arrangement confirmed before building
 anything off it.
+
+![Snow arrangements on a multi-span roof: balanced, and the valley
+accumulation case](docs/images/snow_multispan.png)
+
+*Valley accumulation, EN 1991-1-3 5.3.4 — the case that governs a multi-span
+roof and has no equivalent on a plain duopitch.*
 
 ## Drawing your own profile
 
@@ -186,6 +200,12 @@ Between **1.0 and 4.0 kN/m²** — a 4× spread — depending on its state
 ```
 uv run python -m metal_strength.cli snow --depth 1.0 --state wet --pitch 20
 ```
+
+![3D utilisation of a 30 x 25 m multi-span roof](docs/images/utilisation_3d.png)
+
+*Colour is utilisation, fixed 0 to 1.5 so a colour means the same thing however
+the sliders are set. This is the panel to use when you need to know *where* a
+member is, not just how loaded.*
 
 ## Why bigger rafters can turn the columns green
 
@@ -390,6 +410,9 @@ layer is validated against something derived independently of it.
 | `test_mcp_server.py` | 13 | Every tool registers with a description, round-trips its pydantic model, and gives the right answer — including that an undersized roof actually fails. |
 | `test_viz.py` | 11 | Both chart modes, and that a backend switch cannot leak into later tests. |
 | `test_bom_design.py` | 27 | The solver's own verdict re-checked independently; more load and longer spans must need more steel; an impossible load must be refused, not under-designed. Material-list mass reconciled against the model, VAT arithmetic, and that estimated price rates are declared as estimates. |
+
+The images in this README are generated, not screenshotted — rerun
+`uv run python docs/make_images.py` after anything that changes a chart.
 
 Plus `tests/smoke_mcp.py` — drives the server over a real stdio transport and
 calls all 11 tools.
