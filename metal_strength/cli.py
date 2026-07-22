@@ -103,6 +103,66 @@ def _report(roof, out: Path | None, prefix: str, show: bool = False,
         viz.show()
 
 
+def _serve(a) -> int:
+    """MCP and, with --live, a window it drives -- one process, one roof.
+
+    matplotlib owns the main thread because its GUI must; the server runs beside
+    it on a daemon thread and hands solved roofs over through a queue, which the
+    window drains on a timer. Nothing touches a figure off the main thread.
+    """
+    from . import mcp_server as srv
+
+    if not a.live:
+        if not a.http:
+            srv.mcp.run()
+            return 0
+        srv.mcp.settings.host, srv.mcp.settings.port = a.host, a.port
+        print(f"metal-strength MCP on http://{a.host}:{a.port}/mcp", flush=True)
+        srv.mcp.run(transport="streamable-http")
+        return 0
+
+    import queue
+    import threading
+
+    backend = viz.interactive()
+    if backend is None:
+        print("no GUI toolkit found, so there is no window to drive: "
+              "install one (uv pip install pyqt6) or drop --live.", file=sys.stderr)
+        return 1
+
+    pending: queue.Queue = queue.Queue()
+    srv.set_live_sink(pending.put)
+    fig, axes = viz.live_window()
+
+    def pump() -> None:
+        latest = None
+        while True:  # a burst of calls only needs its last frame drawn
+            try:
+                latest = pending.get_nowait()
+            except queue.Empty:
+                break
+        if latest is not None:
+            roof, results, checks, title = latest
+            viz.repaint(fig, axes, roof, results, checks, title)
+
+    timer = fig.canvas.new_timer(200)
+    timer.add_callback(pump)
+    timer.start()
+
+    if a.http:
+        srv.mcp.settings.host, srv.mcp.settings.port = a.host, a.port
+        target = lambda: srv.mcp.run(transport="streamable-http")  # noqa: E731
+        where = f"http://{a.host}:{a.port}/mcp"
+    else:
+        target = srv.mcp.run
+        where = "stdio"
+    threading.Thread(target=target, daemon=True).start()
+    print(f"metal-strength MCP on {where}; window open ({backend}). "
+          f"Every tune_roof call redraws it. Close the window to stop.", flush=True)
+    viz.show()
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(
         prog="metal-strength",
@@ -201,6 +261,15 @@ def main(argv: list[str] | None = None) -> int:
         sub_p.add_argument("--waste", type=float, default=0.0,
                            help="off-cut allowance in percent")
 
+    serve = sub.add_parser(
+        "serve", help="run the MCP server in this process (optionally with a window)")
+    serve.add_argument("--http", action="store_true",
+                       help="serve over HTTP at http://HOST:PORT/mcp instead of stdio")
+    serve.add_argument("--host", default="127.0.0.1")
+    serve.add_argument("--port", type=int, default=8000)
+    serve.add_argument("--live", action="store_true",
+                       help="open a window that redraws on every tune_roof call")
+
     sect = sub.add_parser("sections", help="catalogue lookup")
     sect.add_argument("name", nargs="?", help="profile name; omit to list a family")
     sect.add_argument("--family", default=None)
@@ -223,6 +292,9 @@ def main(argv: list[str] | None = None) -> int:
         for c in loads.roof_snow_load(sk, a.pitch, exposure=a.exposure):
             print(f"  {c.name:<14s} left {c.left:5.2f}  right {c.right:5.2f} kN/m2")
         return 0
+
+    if a.cmd == "serve":
+        return _serve(a)
 
     if a.cmd == "sections":
         if a.name:

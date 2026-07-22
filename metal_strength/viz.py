@@ -362,6 +362,31 @@ def panel(roof: Roof, results: frame3d.Results, checks: list[ec3.MemberResult],
     return fig
 
 
+def live_window(title: str = ""):
+    """An empty four-panel window for something else to drive. Returns (fig, axes).
+
+    The dashboard's sliders and this are alternatives, deliberately: sliders mean
+    the human owns the parameters, a live window means the MCP session does, and
+    two owners of one roof is how they drift apart.
+    """
+    fig = plt.figure(figsize=(15, 9))
+    axes = _layout(fig, controls=False)
+    fig.colorbar(plt.cm.ScalarMappable(cmap=UTIL_CMAP, norm=UTIL_NORM),
+                 ax=axes[0], shrink=0.6, pad=0.12, label=_L("utilisation"))
+    fig.suptitle(title or _L("waiting"), fontsize=12)
+    return fig, axes
+
+
+def repaint(fig, axes, roof: Roof, results: frame3d.Results,
+            checks: list[ec3.MemberResult], title: str = "") -> None:
+    """Redraw a live window with a freshly solved roof."""
+    worst = _paint(axes, roof, results, checks)
+    defl = roof.deflection(results)
+    head = _headline(roof, checks, defl, worst)
+    fig.suptitle(f"{title}\n{head}" if title else head, fontsize=12)
+    fig.canvas.draw_idle()
+
+
 # --- the live dashboard -----------------------------------------------------
 
 

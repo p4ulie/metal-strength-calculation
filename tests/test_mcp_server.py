@@ -204,3 +204,52 @@ def test_render_snow_cases(tmp_path, monkeypatch):
     monkeypatch.setattr(srv, "CHARTS", tmp_path)
     p = srv.render_snow_cases(2.0, 25.0)["path"]
     assert Path(p).exists()
+
+
+def test_tune_roof_feeds_a_live_window():
+    """The window is redrawn from what the tool solved -- no second solve."""
+    import matplotlib.pyplot as plt
+
+    from metal_strength import viz
+
+    seen = []
+    srv.set_live_sink(seen.append)
+    try:
+        state = srv.tune_roof(reset=True, shape="multispan", span_m=30.0,
+                              chart=False)[0]
+        assert state["live_window"] is True
+        assert len(seen) == 1
+
+        roof, results, checks, title = seen[-1]
+        assert roof.profile.shape == "multispan"
+        assert round(float(max(c.utilisation for c in checks)), 3) == \
+            state["worst_utilisation"]
+
+        # What the pump does on the main thread must actually paint.
+        fig, axes = viz.live_window()
+        try:
+            viz.repaint(fig, axes, roof, results, checks, title)
+            assert fig._suptitle.get_text()
+        finally:
+            plt.close(fig)
+    finally:
+        srv.set_live_sink(None)
+
+    # Detached again: no more traffic.
+    srv.tune_roof(reset=True, chart=False)
+    assert len(seen) == 1
+
+
+def test_serve_is_a_cli_subcommand():
+    from metal_strength import cli
+
+    # Parsing must reach _serve without running a server.
+    called = {}
+    original = cli._serve
+    cli._serve = lambda a: called.setdefault("args", a) and 0 or 0
+    try:
+        assert cli.main(["serve", "--http", "--port", "9999"]) == 0
+        assert called["args"].http and called["args"].port == 9999
+        assert not called["args"].live
+    finally:
+        cli._serve = original

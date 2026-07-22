@@ -420,6 +420,17 @@ TUNE_DEFAULTS: dict = {
 }
 _session: dict = dict(TUNE_DEFAULTS)
 
+# When a live window is open in this process it registers a sink here, and every
+# tune_roof call posts its solved roof to it. The sink must be thread-safe --
+# tune_roof runs on the server's thread, the window redraws on the main one.
+_live_sink = None
+
+
+def set_live_sink(sink) -> None:
+    """Route solved roofs to a live window. ``None`` detaches it."""
+    global _live_sink
+    _live_sink = sink
+
 
 def _session_roof(params: dict):
     snow = params["snow_kn_m2"]
@@ -503,6 +514,10 @@ def tune_roof(
         "snow_cases_available": list(loads.ARRANGEMENTS[_session["shape"]]),
         "disclaimer": DISCLAIMER,
     }
+    if _live_sink is not None:
+        _live_sink((roof, results, checks, f"{_session['shape']} roof"))
+        state["live_window"] = True
+
     if not chart:
         return [state]
 
@@ -739,22 +754,16 @@ def render_snow_cases(
 
 
 def main() -> None:
-    """stdio by default; ``--http`` serves the same tools over HTTP instead."""
-    import argparse
+    """``python -m metal_strength.mcp_server`` -- the same thing as ``serve``.
 
-    ap = argparse.ArgumentParser(prog="metal-strength-mcp")
-    ap.add_argument("--http", action="store_true",
-                    help="serve over HTTP at http://HOST:PORT/mcp instead of stdio")
-    ap.add_argument("--host", default="127.0.0.1")
-    ap.add_argument("--port", type=int, default=8000)
-    a = ap.parse_args()
+    Kept because MCP clients are configured with a module path and stdio; the
+    server itself lives in the one CLI now.
+    """
+    import sys
 
-    if not a.http:
-        mcp.run()
-        return
-    mcp.settings.host, mcp.settings.port = a.host, a.port
-    print(f"metal-strength MCP on http://{a.host}:{a.port}/mcp", flush=True)
-    mcp.run(transport="streamable-http")
+    from .cli import main as cli_main
+
+    raise SystemExit(cli_main(["serve", *sys.argv[1:]]))
 
 
 if __name__ == "__main__":

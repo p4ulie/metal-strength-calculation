@@ -201,8 +201,10 @@ OK   shear z (web)           0.39  137/348 kN   [6.2.6]
 ## MCP server
 
 ```
-uv run python -m metal_strength.mcp_server        # stdio
-uv run python -m metal_strength.mcp_server --http --port 8000   # http://127.0.0.1:8000/mcp
+uv run python -m metal_strength.cli serve                      # stdio
+uv run python -m metal_strength.cli serve --http --port 8000   # http://127.0.0.1:8000/mcp
+uv run python -m metal_strength.cli serve --http --live        # ... and a window it drives
+uv run python -m metal_strength.mcp_server                     # same thing, for MCP client configs
 uv run python tests/smoke_mcp.py                  # exercise every tool
 ```
 
@@ -210,6 +212,23 @@ Tools: `snow_load_from_depth`, `snow_load_eurocode`, `list_sections`,
 `list_shapes`, `section_properties`, `check_beam`, `check_rod_buckling`,
 `check_roof`, `tune_roof`, `solve_frame`, `propose_construction`,
 `material_list`, `render_snow_cases`.
+
+### One process, not two
+
+`serve` runs the MCP server inside the CLI, so there is a single application:
+`metal-strength`. Adding `--live` opens a window in that same process which
+redraws on every `tune_roof` call — matplotlib owns the main thread because its
+GUI must, the server runs beside it on a daemon thread, and solved roofs cross
+between them through a queue drained on a timer. Nothing touches a figure off
+the main thread.
+
+Two processes cannot do this. A separate `./roof --show` and a separate server
+hold two unrelated roofs in two memories, and no tool call will ever move that
+window.
+
+The live window has no sliders, on purpose: `--show` means you own the
+parameters, `--live` means the MCP session does, and two owners of one roof is
+how they drift apart.
 
 ### Tuning a roof remotely
 
