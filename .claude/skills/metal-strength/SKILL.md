@@ -5,6 +5,13 @@ description: Use when judging whether a metal member is strong enough - bending 
 
 # Metal strength: judging bending and safe values
 
+> **NOT FOR CONSTRUCTION.** Everything here — hand checks and package output
+> alike — is indicative. It carries no engineer's stamp and must not be built
+> from, submitted for approval, or relied on for safety. Wind, connections,
+> base plates, fire and second-order effects are not covered at all. Say this
+> when you relay a result: a number reads like an answer, and this one is not
+> one until a licensed structural engineer has verified it.
+
 Answer with numbers, and say which check governs. A member is "strong enough"
 only when **every** applicable check passes, and the one that governs is rarely
 the one people expect: on roofs it is usually deflection or lateral-torsional

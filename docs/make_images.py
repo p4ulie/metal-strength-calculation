@@ -77,6 +77,45 @@ def snow_arrangements() -> None:
     viz.snow_cases(4.0, 15.0, OUT / "snow_multispan.png", shape="multispan")
 
 
+def report_page() -> None:
+    """Page 1 of the PDF, rasterised so the README can show it.
+
+    Needs poppler's pdftoppm; skipped with a note if it is not installed, since
+    it is a documentation nicety and not a dependency of the package.
+    """
+    import shutil
+    import subprocess
+    import tempfile
+
+    from metal_strength import bom
+
+    con = roof(span=12, length=20, pitch_deg=20, rafter="IPE450",
+               column="HEB240", purlin="SHS140x140x5", snow_kn_m2=SNOW)
+    results = con.solve()
+    checks = con.check(results)
+    listing = bom.format_bom(bom.bill_of_materials(con, bom.Prices.load()), "en")
+
+    with tempfile.TemporaryDirectory() as tmp:
+        pdf = Path(tmp) / "report.pdf"
+        viz.report_pdf(con, results, checks, pdf, title="duopitch 12 x 20 m",
+                       material_list=listing, sk=4.0)
+        if not shutil.which("pdftoppm"):
+            print("  (skipped report_page: no pdftoppm)")
+            return
+        subprocess.run(["pdftoppm", "-png", "-r", "80", "-f", "1", "-l", "1",
+                        str(pdf), str(OUT / "report")], check=True)
+    for stray in OUT.glob("report-*.png"):
+        stray.replace(OUT / "report_page1.png")
+
+
+def ranking() -> None:
+    """Every member on one chart -- what --top 0 gets you."""
+    con = roof(span=12, length=20, pitch_deg=20, rafter="IPE450",
+               column="HEB240", purlin="SHS140x140x5", snow_kn_m2=SNOW)
+    checks = con.check(con.solve())
+    viz.utilisation_bars(checks, OUT / "ranking_all.png", top=0)
+
+
 def utilisation() -> None:
     """The 3D panel on its own -- where a member is, not just how loaded."""
     con = roof(span=30, length=25, pitch_deg=15, shape="multispan",
@@ -88,7 +127,8 @@ def utilisation() -> None:
 
 if __name__ == "__main__":
     OUT.mkdir(parents=True, exist_ok=True)
-    for build in (dashboard, shape_gallery, snow_arrangements, utilisation):
+    for build in (dashboard, shape_gallery, snow_arrangements, utilisation,
+                  report_page, ranking):
         build()
         print(f"  {build.__name__}")
     for image in sorted(OUT.glob("*.png")):

@@ -79,6 +79,7 @@ def _report(roof, out: Path | None, prefix: str, show: bool = False,
     print(f"\n=> {i18n.verdict(ok, lang)} "
           f"({i18n.t('utilisation', lang)} {worst.utilisation:.2f}, "
           f"{i18n.t('deflection', lang)} {defl.utilisation:.2f})")
+    print(f"\n{i18n.t('disclaimer', lang)}")
 
     if out:
         # Separate PNGs, which is what you want for a report.
@@ -455,7 +456,8 @@ def main(argv: list[str] | None = None) -> int:
                 purlin_spacing=a.purlin_spacing, grade=a.grade,
                 snow_depth=a.snow_depth if a.snow_depth is not None else 1.0,
                 snow_state=a.snow_state, shape=a.shape, **proposal.sections))
-        print(f"\n{i18n.t('disclaimer', a.lang)}")
+        if not (a.out or a.show or a.pdf):
+            print(f"\n{i18n.t('disclaimer', a.lang)}")
         return 0
 
     snow_load = _snow_for(a, p)

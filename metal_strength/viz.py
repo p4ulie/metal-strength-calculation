@@ -51,6 +51,30 @@ def _label(check: ec3.MemberResult) -> str:
     return i18n.member_label(check.section, LANG)
 
 
+def _wrap(fig, text: str, fontsize: float, weight: str = "normal",
+          margin: float = 0.9) -> str:
+    """Fold ``text`` so it cannot run off the figure.
+
+    Titles are composed from translated sentences, and Slovak runs a third
+    longer than English -- a line that fits in one language silently overruns
+    both edges in another. The character width is *measured* rather than
+    guessed, because bold is wider than normal and 20pt bold is wider still;
+    estimating it is how the first attempt still clipped its own title.
+    """
+    import textwrap
+
+    width_px = fig.get_size_inches()[0] * fig.dpi * margin
+    try:
+        renderer = fig.canvas.get_renderer()
+        probe = fig.text(0, 0, "n" * 50, fontsize=fontsize, weight=weight)
+        per_char = probe.get_window_extent(renderer=renderer).width / 50
+        probe.remove()
+    except Exception:  # noqa: BLE001 - no renderer yet; fall back to an estimate
+        per_char = 0.62 * fontsize * fig.dpi / 72
+    chars = max(20, int(width_px / max(per_char, 1e-6)))
+    return "\n".join(textwrap.fill(line, chars) for line in text.split("\n"))
+
+
 # Green through amber to red: utilisation 0 -> 1 -> beyond.
 UTIL_CMAP = LinearSegmentedColormap.from_list(
     "utilisation", ["#2e7d32", "#9ccc65", "#fdd835", "#fb8c00", "#c62828"]
@@ -333,7 +357,7 @@ def snow_cases(sk: float, pitch_deg: float, path: str | Path,
             h = 0.35 * s / peak
             ax.fill_between([x0, x1], [z0, z1], [z0 + h, z1 + h],
                             color="#90caf9", edgecolor="#1565c0")
-            if s > 0:
+            if s > 1e-6:  # a slope steep enough to shed snow carries none
                 ax.text((x0 + x1) / 2, max(z0, z1) + h + 0.03, f"{s:.2f}",
                         ha="center", fontsize=8)
         ax.set_title(i18n.snow_term(case.name, LANG), fontsize=10)
@@ -344,7 +368,7 @@ def snow_cases(sk: float, pitch_deg: float, path: str | Path,
              f"sk={sk:.2f} kN/m2, {_L('pitch')} {pitch_deg:.0f}deg")
     if fr.mu_is_approximate:
         title += f"\n{_L('mu_approximate')}"
-    fig.suptitle(title, fontsize=10)
+    fig.suptitle(_wrap(fig, title, 10), fontsize=10)
     fig.tight_layout()
     p = _out(path)
     fig.savefig(p, dpi=130)
@@ -399,8 +423,10 @@ def panel(roof: Roof, results: frame3d.Results, checks: list[ec3.MemberResult],
     defl = roof.deflection(results)
     fig.colorbar(plt.cm.ScalarMappable(cmap=UTIL_CMAP, norm=UTIL_NORM),
                  ax=axes[0], shrink=0.6, pad=0.12, label=_L("utilisation"))
-    fig.suptitle(f"{title}\n{_headline(roof, checks, defl, worst)}"
-                 if title else _headline(roof, checks, defl, worst), fontsize=12)
+    head = (f"{title}\n{_headline(roof, checks, defl, worst)}" if title
+            else _headline(roof, checks, defl, worst))
+    fig.suptitle(_wrap(fig, head, 12), fontsize=12)
+    _stamp(fig)
     return fig
 
 
@@ -416,6 +442,12 @@ def _text_page(fig, lines: list[tuple[str, float, str]]) -> None:
                  weight="bold" if style == "bold" else "normal",
                  family="monospace" if style == "mono" else "sans-serif")
         y -= 0.022 * (size / 9.0) * (text.count("\n") + 1) + 0.012
+
+
+def _stamp(fig) -> None:
+    """Mark every page, because pages get separated from the one that said it."""
+    fig.text(0.99, 0.01, _L("not_for_construction"), fontsize=7, ha="right",
+             va="bottom", color="#c62828")
 
 
 def report_pdf(roof: Roof, results: frame3d.Results, checks: list[ec3.MemberResult],
@@ -441,7 +473,8 @@ def report_pdf(roof: Roof, results: frame3d.Results, checks: list[ec3.MemberResu
         # -- page 1: the verdict, and what it was a verdict on ----------------
         fig = plt.figure(figsize=(8.27, 11.69))  # A4 portrait
         rows = [
-            (title or "metal-strength", 20, "bold"),
+            (_L("not_for_construction"), 13, "bold"),
+            (_wrap(fig, title or "metal-strength", 20, "bold"), 20, "bold"),
             (f"{_L('utilisation')}: {worst.utilisation:.2f}   "
              f"{_L('deflection')}: {defl.utilisation:.2f}", 12, "normal"),
             (f"=> {i18n.verdict(ok, LANG)}", 22, "bold"),
@@ -466,17 +499,18 @@ def report_pdf(roof: Roof, results: frame3d.Results, checks: list[ec3.MemberResu
                      f"{defl.name:<26s}{defl.demand:.1f} / {defl.capacity:.1f} mm",
                      8, "mono"))
         if fr is not None and fr.mu_is_approximate:
-            rows.append((_L("mu_approximate"), 8, "bold"))
+            rows.append((_wrap(fig, _L("mu_approximate"), 8, "bold"), 8, "bold"))
         _text_page(fig, rows)
-        fig.text(0.06, 0.05, i18n.t("disclaimer", LANG), fontsize=8, wrap=True,
-                 va="bottom", color="#555555")
+        fig.text(0.06, 0.05, _wrap(fig, i18n.t("disclaimer", LANG), 8),
+                 fontsize=8, va="bottom", color="#555555")
+        _stamp(fig)
         pdf.savefig(fig)
         _finish(fig)
 
         # -- page 2: the charts -----------------------------------------------
         panels = panel(roof, results, checks, title=title)
         panels.set_size_inches(11.69, 8.27)  # A4 landscape
-        pdf.savefig(panels)
+        pdf.savefig(panels)  # panel() stamps itself
         _finish(panels)
 
         # -- page 3: the snow arrangements this shape allows -------------------
@@ -498,6 +532,7 @@ def report_pdf(roof: Roof, results: frame3d.Results, checks: list[ec3.MemberResu
                 ax.set_xticks([])
             axes[0].set_ylabel("m")
             fig.suptitle(f"{_L('snow_arrangements')} -- sk={sk:.2f} kN/m2")
+            _stamp(fig)
             pdf.savefig(fig)
             _finish(fig)
 
@@ -506,6 +541,7 @@ def report_pdf(roof: Roof, results: frame3d.Results, checks: list[ec3.MemberResu
             fig = plt.figure(figsize=(11.69, 8.27))
             _text_page(fig, [(i18n.t("material_list", LANG), 14, "bold"),
                              (material_list, 8, "mono")])
+            _stamp(fig)
             pdf.savefig(fig)
             _finish(fig)
 
@@ -599,6 +635,7 @@ def dashboard(
     ladders = {role: _ladder(S[role]) for role in ("rafter", "column", "purlin")}
 
     fig = plt.figure(figsize=(15, 9.5))
+    _stamp(fig)
     axes = _layout(fig, controls=True)
     fig.colorbar(plt.cm.ScalarMappable(cmap=UTIL_CMAP, norm=UTIL_NORM),
                  ax=axes[0], shrink=0.6, pad=0.12, label=_L("utilisation"))
@@ -690,8 +727,8 @@ def dashboard(
         try:
             shapes.validate(pts)
         except ValueError as exc:
-            fig.suptitle(f"{_L('invalid_profile')}: {exc}", fontsize=11,
-                         color="#c62828")
+            fig.suptitle(_wrap(fig, f"{_L('invalid_profile')}: {exc}", 11),
+                         fontsize=11, color="#c62828")
             fig.canvas.draw_idle()
             return
         S["points"] = pts
@@ -730,11 +767,12 @@ def dashboard(
         snow_note = (f"{S['snow_kn_m2']:.2f} kN/m$^2$" if S["snow_kn_m2"] is not None
                      else f"{S['snow_depth_m']:.2f} m, "
                           f"{i18n.snow_term(S['snow_state'], LANG)}")
-        fig.suptitle(
+        fig.suptitle(_wrap(
+            fig,
             f"{i18n.shape_term(fr.shape, LANG)} {S['span_m']:.0f} x "
             f"{S['length_m']:.0f} {_L('roof_at')} {S['pitch_deg']:.0f}deg, "
             f"{S['grade']}   |   {_L('snow')} {snow_note}\n"
-            f"{_headline(roof, checks, defl, worst)}{warning}", fontsize=11)
+            f"{_headline(roof, checks, defl, worst)}{warning}", 11), fontsize=11)
         fig.canvas.draw_idle()
         return roof, results, checks
 

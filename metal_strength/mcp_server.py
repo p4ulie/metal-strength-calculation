@@ -27,9 +27,12 @@ mcp = FastMCP("metal-strength")
 CHARTS = Path(tempfile.gettempdir()) / "metal-strength-charts"
 
 DISCLAIMER = (
-    "Indicative Eurocode check, not a substitute for a licensed structural "
-    "engineer. Second-order effects, connections, base plates and wind load "
-    "(EN 1991-1-4) are not covered."
+    "NOT FOR CONSTRUCTION. An indicative Eurocode check, not a design: it "
+    "carries no engineer's stamp and must not be built from, submitted for "
+    "approval, or relied on for safety. Have it verified by a licensed "
+    "structural engineer. Second-order effects, connections, base plates, fire "
+    "and wind load (EN 1991-1-4) are not covered. Say this when you relay a "
+    "result -- a number from this tool reads like an answer, and it is not one."
 )
 
 

@@ -1,10 +1,58 @@
 # metal-strength
 
+> [!WARNING]
+> **NOT FOR CONSTRUCTION.** This is an indicative Eurocode check, not a design.
+> It carries no engineer's stamp and must not be built from, submitted for
+> approval, or relied on for safety. Wind, connections, base plates, fire and
+> second-order effects are not covered at all. Have anything it produces
+> verified by a licensed structural engineer before it touches a real building.
+> See [Limitations](#limitations--read-before-trusting-a-number).
+
 Eurocode steel strength calculator — from a single bending rod to a whole 3D
 roof under a metre of snow.
 
+## Install
+
+Python 3.12+ and [uv](https://docs.astral.sh/uv/). Everything else comes from
+`uv sync`; there is nothing to compile.
+
 ```
+git clone https://github.com/p4ulie/metal-strength-calculation
+cd metal-strength-calculation
 uv sync
+```
+
+For the interactive window you also need a GUI toolkit — matplotlib ships
+without one:
+
+```
+uv pip install pyqt6
+```
+
+Charts and reports work without it; only `--show` needs it, and it says so
+rather than failing if none is found.
+
+## Run it
+
+`./ms` is a small shell wrapper in the repo root. It calls the real CLI
+(`python -m metal_strength.cli`) with the parameters worth not retyping — a
+12 × 20 m roof, 1 m of wet snow, Slovak output — and opens the window. **Any
+flag you pass overrides its defaults**, because argparse takes the last value:
+
+```
+./ms                                  # the default roof, dashboard window
+./ms --span 18 --shape multispan      # your roof instead
+./ms --out out --no-show              # write PNGs, no window
+./ms --pdf report.pdf --cost          # the four-page report, priced
+./ms design --cost                    # let it choose the sections
+./ms snow --depth 1.0 --state wet     # just the snow load
+./ms serve                            # MCP over stdio, no window
+```
+
+Nothing depends on the wrapper — it is a short bash script, and every command
+above works spelled out in full:
+
+```
 uv run python -m metal_strength.cli roof --span 12 --length 20 --pitch 20 \
     --snow-depth 1.0 --snow-state wet --rafter IPE450 --column HEB240 \
     --purlin SHS140x140x5 --out out
@@ -14,11 +62,12 @@ uv run python -m metal_strength.cli roof --span 12 --length 20 --pitch 20 \
 => the structure PASSES (strength 0.90, deflection 0.51)
 ```
 
-Add `--show` to open the charts in interactive windows (zoom, pan, save) as
-well as writing the PNGs:
+`--show` opens the charts in interactive windows (zoom, pan, save) as well as
+writing the PNGs. On a roof that window is the live dashboard, and it also
+serves MCP — see [One process, not two](#one-process-not-two).
 
 ```
-uv run python -m metal_strength.cli beam --span 6 --section IPE200 --udl 5 --show
+./ms beam --span 6 --section IPE200 --udl 5 --show
 ```
 
 ![The dashboard: 3D utilisation, ranked members, deflected shape, force
@@ -26,6 +75,30 @@ diagrams, and the controls that re-solve them](docs/images/dashboard.png)
 
 *`./ms` — drag a slider or a radio and the frame re-solves; the same window is
 what `tune_roof` drives over MCP.*
+
+## Contents
+
+**Getting started** · [Install](#install) · [Run it](#run-it)
+
+**Using it** · [What it does](#what-it-does) · [Command line](#command-line) ·
+[Roof shapes](#roof-shapes) · [Drawing your own profile](#drawing-your-own-profile) ·
+[Design it for me](#design-it-for-me) · [Material list and cost](#material-list-and-cost)
+
+**Looking at it** · [Charts and the live dashboard](#charts-and-the-live-dashboard) ·
+[Seeing every member](#seeing-every-member) ·
+[A report to send](#a-report-to-send)
+
+**Driving it from an LLM** · [MCP server](#mcp-server) ·
+[Tuning a roof remotely](#tuning-a-roof-remotely) ·
+[Shapes in words](#shapes-in-words) · [Claude Code skill](#claude-code-skill)
+
+**The engineering** · [Checks performed](#checks-performed) ·
+[How much is a metre of snow?](#how-much-is-a-metre-of-snow) ·
+[Why bigger rafters can turn the columns green](#why-bigger-rafters-can-turn-the-columns-green) ·
+[Validation](#validation)
+
+**Before you trust it** · [Limitations](#limitations--read-before-trusting-a-number) ·
+[Prices](#prices--read-this) · [Speed](#speed) · [Licence](#licence)
 
 ## What it does
 
@@ -41,10 +114,6 @@ what `tune_roof` drives over MCP.*
 | Language | `i18n.py` | report labels in en / sk / cs |
 | Output | `viz.py` | charts as PNGs, one window, or a live dashboard |
 | LLM access | `mcp_server.py` | MCP over stdio or HTTP, 14 tools |
-
-There is a `./ms` wrapper in the repo carrying the parameters worth not
-retyping (`./ms`, `./ms design --cost`, `./ms serve`). Anything
-you pass overrides its defaults.
 
 ## Roof shapes
 
@@ -350,8 +419,13 @@ blob rather than a path, so a client on another machine gets the bytes:
 | 3 | the EN 1991-1-3 snow arrangements for that shape |
 | 4 | material list with indicative prices (omitted if you did not ask for costs) |
 
+![Page 1 of the report: the verdict, the parameters it applied to, the worst
+members, and the warning](docs/images/report_page1.png)
+
 Charts are vector, so it prints sharp. `--lang` / `language=` translates the
-prose. Written by matplotlib's own PDF backend — no extra dependency.
+prose. Written by matplotlib's own PDF backend — no extra dependency. Every
+page is stamped **NOT FOR CONSTRUCTION**, because pages get separated from the
+page that said it.
 
 ### Shapes in words
 
@@ -458,6 +532,9 @@ tall standalone PNG every name is printed at 7 pt, in the dashboard's small
 panel they thin to every fifth and shrink to 4.5 pt, and if even that would
 collide the axis becomes a position (1 … n) — every bar is still drawn, so the
 distribution reads either way. The title carries the count and how many fail.
+
+![All 86 members of a duopitch roof, ranked by
+utilisation](docs/images/ranking_all.png)
 
 To identify a specific member, the 3D panel is the better tool; the ranking is
 for seeing the spread.

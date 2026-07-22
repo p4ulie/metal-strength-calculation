@@ -173,14 +173,27 @@ MESSAGES: dict[str, dict[str, str]] = {
     "best_reached": {"en": "best reached", "sk": "najlepšie dosiahnuté",
                      "cs": "nejlépe dosaženo"},
     "disclaimer": {
-        "en": "Indicative Eurocode check. Not a substitute for a licensed "
-              "structural engineer. Wind, connections and second-order effects "
-              "are not covered.",
-        "sk": "Orientačný posudok podľa Eurokódu. Nenahrádza autorizovaného "
-              "statika. Vietor, spoje a teória II. rádu nie sú zahrnuté.",
-        "cs": "Orientační posudek podle Eurokódu. Nenahrazuje autorizovaného "
-              "statika. Vítr, spoje a teorie II. řádu nejsou zahrnuty.",
+        "en": "NOT FOR CONSTRUCTION. An indicative Eurocode check, not a design: "
+              "it carries no engineer's stamp and must not be built from, "
+              "submitted for approval, or relied on for safety. Have it verified "
+              "by a licensed structural engineer. Wind, connections, base plates, "
+              "fire and second-order effects are not covered.",
+        "sk": "NIE JE URČENÉ NA REALIZÁCIU. Orientačný posudok podľa Eurokódu, "
+              "nie projekt: nemá pečiatku autorizovaného statika, nesmie sa "
+              "podľa neho stavať, predkladať na povolenie ani sa naň spoliehať "
+              "z hľadiska bezpečnosti. Nechajte si ho overiť autorizovaným "
+              "statikom. Vietor, spoje, pätky, požiar a teória II. rádu nie sú "
+              "zahrnuté.",
+        "cs": "NENÍ URČENO K REALIZACI. Orientační posudek podle Eurokódu, "
+              "nikoli projekt: nemá razítko autorizovaného statika, nesmí se "
+              "podle něj stavět, předkládat k povolení ani se na něj spoléhat "
+              "z hlediska bezpečnosti. Nechte si jej ověřit autorizovaným "
+              "statikem. Vítr, spoje, patky, požár a teorie II. řádu nejsou "
+              "zahrnuty.",
     },
+    "not_for_construction": {"en": "NOT FOR CONSTRUCTION",
+                             "sk": "NIE JE URČENÉ NA REALIZÁCIU",
+                             "cs": "NENÍ URČENO K REALIZACI"},
 }
 
 

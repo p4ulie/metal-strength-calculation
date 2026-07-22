@@ -275,3 +275,44 @@ def test_every_readme_image_exists():
         image = Path(relative)
         assert image.exists(), relative
         assert image.stat().st_size > 5_000, f"{relative} looks empty"
+
+
+def test_readme_index_links_resolve():
+    """A table of contents that points at nothing is worse than none."""
+    import re
+
+    readme = Path("README.md").read_text()
+    headings = re.findall(r"^#{2,3} (.+)$", readme, re.M)
+    slugs = {re.sub(r"[^a-z0-9 -]", "", h.lower()).replace(" ", "-")
+             for h in headings}
+    links = re.findall(r"\]\(#([a-z0-9-]+)\)", readme)
+    assert links, "the README is meant to have an index"
+    assert not [link for link in links if link not in slugs]
+
+
+def test_the_docs_say_it_must_not_be_built_from():
+    for path in (Path("README.md"), Path(".claude/skills/metal-strength/SKILL.md")):
+        assert "NOT FOR CONSTRUCTION" in path.read_text(), path
+
+
+def test_readme_opens_with_install_then_run():
+    """A reader should not have to hunt for how to start it."""
+    import re
+
+    readme = Path("README.md").read_text()
+    order = [h for h in re.findall(r"^## (.+)$", readme, re.M)]
+    assert order[:2] == ["Install", "Run it"], order[:3]
+    assert "uv sync" in readme
+    # The wrapper is offered by name, and explained rather than assumed.
+    assert "./ms" in readme and "wrapper" in readme
+
+
+def test_wrapper_accepts_every_subcommand_the_readme_shows():
+    """Each `./ms <cmd>` in the README must be one the wrapper passes through."""
+    import re
+
+    readme = Path("README.md").read_text()
+    shown = {m for m in re.findall(r"^\./ms (\w+)", readme, re.M)}
+    handled = set(re.findall(r"^\s+(\w[\w |]*)\) CMD=\$1",
+                             Path("ms").read_text(), re.M)[0].split(" | "))
+    assert shown <= handled, shown - handled

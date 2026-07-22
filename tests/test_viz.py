@@ -483,3 +483,125 @@ def test_cli_top_reaches_the_charts(monkeypatch, tmp_path):
         assert viz.RANKING_TOP == 0
     finally:
         viz.RANKING_TOP = before
+
+
+def _overflowing(fig) -> list[str]:
+    """Figure-level texts whose rendered box escapes the figure."""
+    fig.canvas.draw()
+    renderer = fig.canvas.get_renderer()
+    width = fig.get_window_extent().width
+    out = []
+    for text in fig.texts:
+        box = text.get_window_extent(renderer=renderer)
+        if box.x0 < -1 or box.x1 > width + 1:
+            out.append(text.get_text()[:60])
+    return out
+
+
+@pytest.mark.parametrize("lang", ["en", "sk", "cs"])
+def test_titles_never_run_off_the_figure(lang):
+    """Slovak runs a third longer than English; a title that fits in one
+    language used to overrun both edges in another."""
+    import matplotlib.pyplot as plt
+
+    from metal_strength.model import roof
+
+    before = viz.LANG
+    viz.LANG = lang
+    plt.close("all")
+    try:
+        # mansard: the only case that appends the 160-character mu warning.
+        con = roof(span=12, length=20, pitch_deg=20, shape="mansard",
+                   rafter="IPE240", column="HEB160", purlin="SHS100x100x4",
+                   snow_kn_m2=3.2)
+        results = con.solve()
+        checks = con.check(results)
+
+        panel = viz.panel(con, results, checks, title="mansard 12 x 20 m")
+        assert _overflowing(panel) == []
+        plt.close(panel)
+
+        board = viz.dashboard(span=12.0, length=20.0, pitch_deg=20.0,
+                              shape="mansard", rafter="IPE240", column="HEB160",
+                              purlin="SHS100x100x4", snow_depth=1.0,
+                              snow_state="wet")
+        assert _overflowing(board) == []
+        plt.close(board)
+    finally:
+        viz.LANG = before
+
+
+def test_a_long_title_wraps_rather_than_clipping(tmp_path):
+    import matplotlib.pyplot as plt
+
+    from metal_strength.model import roof
+
+    plt.close("all")
+    con = roof(span=12, length=20, pitch_deg=20, snow_kn_m2=2.0)
+    results = con.solve()
+    long_title = "a deliberately long construction name for wrapping " * 2
+    fig = viz.panel(con, results, con.check(results), title=long_title)
+    try:
+        assert _overflowing(fig) == []
+        assert "\n" in fig._suptitle.get_text(), "it must fold, not shrink"
+    finally:
+        plt.close(fig)
+
+
+def test_wrap_measures_bold_as_wider_than_normal():
+    """The estimate that ignored weight is what clipped the PDF's own title."""
+    import matplotlib.pyplot as plt
+
+    fig = plt.figure(figsize=(8.27, 11.69))
+    try:
+        fig.canvas.draw()
+        sentence = "wrapping has to account for the weight of the text " * 2
+        normal = viz._wrap(fig, sentence, 20, "normal").count("\n")
+        bold = viz._wrap(fig, sentence, 20, "bold").count("\n")
+        assert bold >= normal
+    finally:
+        plt.close(fig)
+
+
+def test_every_report_page_is_stamped(tmp_path, monkeypatch):
+    """Pages get separated from the page that carried the warning.
+
+    The PDF stores text as glyph codes, so this counts the stamping instead of
+    grepping the bytes for it.
+    """
+    from metal_strength import i18n
+    from metal_strength.model import roof
+
+    stamped = []
+    original = viz._stamp
+    monkeypatch.setattr(viz, "_stamp",
+                        lambda fig: stamped.append(fig) or original(fig))
+
+    con = roof(span=12, length=20, pitch_deg=20, snow_kn_m2=2.0)
+    results = con.solve()
+    path = viz.report_pdf(con, results, con.check(results), tmp_path / "r.pdf",
+                          title="stamped", material_list="x", sk=2.5)
+
+    assert _pdf_pages(path) == 4
+    assert len(stamped) == 4, "one stamp per page"
+    marker = i18n.t("not_for_construction", "en")
+    for fig in stamped:
+        assert any(marker in t.get_text() for t in fig.texts)
+
+
+def test_charts_that_travel_alone_are_stamped():
+    """A panel PNG lands in a chat with no report around it."""
+    import matplotlib.pyplot as plt
+
+    from metal_strength import i18n
+    from metal_strength.model import roof
+
+    plt.close("all")
+    con = roof(span=12, length=20, pitch_deg=20, snow_kn_m2=2.0)
+    results = con.solve()
+    fig = viz.panel(con, results, con.check(results), title="alone")
+    try:
+        marker = i18n.t("not_for_construction", "en")
+        assert any(marker in t.get_text() for t in fig.texts)
+    finally:
+        plt.close(fig)
