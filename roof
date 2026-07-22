@@ -1,0 +1,39 @@
+#!/usr/bin/env bash
+# The roof you keep typing. Anything you pass overrides these -- argparse takes
+# the last value, so `./roof --shape multispan --span 30` just works.
+#
+#   ./roof                       the usual roof, live dashboard
+#   ./roof --shape sawtooth      same, different profile
+#   ./roof --out out --no-show   PNGs instead of a window
+#   ./roof design --cost         let it pick the sections and price them
+#   ./roof snow --depth 1.0      subcommands with no defaults pass straight through
+set -euo pipefail
+cd "$(dirname "$0")"
+
+CMD=roof
+case "${1:-}" in
+    roof | design | beam | snow | sections) CMD=$1; shift ;;
+esac
+
+# Size and load, shared by the two commands that build a roof. Sections are
+# roof-only: design chooses them for you.
+COMMON=(--span 12 --length 20 --pitch 20 --snow-depth 1.0 --snow-state wet
+        --lang sk --country SK)
+case $CMD in
+    roof)   defaults=("${COMMON[@]}" --rafter IPE450 --column HEB240
+                      --purlin SHS140x140x5) ;;
+    design) defaults=("${COMMON[@]}") ;;
+    *)      defaults=() ;;  # beam, snow and sections take none of it
+esac
+
+# --show unless you say otherwise, and only where there is something to show.
+show=--show
+[[ $CMD == snow || $CMD == sections ]] && show=
+args=()
+for a in "$@"; do
+    [[ $a == --no-show ]] && { show=; continue; }
+    args+=("$a")
+done
+
+exec uv run python -m metal_strength.cli "$CMD" \
+    "${defaults[@]}" ${show:+$show} ${args[@]+"${args[@]}"}

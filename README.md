@@ -278,6 +278,30 @@ Charts render headless by default (matplotlib `Agg`). `--show` picks the first
 GUI backend that imports; if none does it says so and falls back to writing
 files, so install one — `uv pip install pyqt6`.
 
+## Speed
+
+One dashboard interaction — move a slider, switch a shape, drag a vertex —
+costs about 265 ms: ~15 ms to re-solve, the rest to redraw. It used to be near
+a second. Two things did it, neither of them a GPU:
+
+- **BLAS threads.** Stiffness matrices here are a few hundred DOF. OpenBLAS
+  spawns a thread per core for them by default and spends all its time
+  synchronising: a 330x330 solve measured **0.9 ms on one thread and 23-300 ms
+  on sixteen**. `metal_strength/__init__.py` pins the thread count to 1 before
+  numpy loads. Export `OPENBLAS_NUM_THREADS` yourself to override — worth doing
+  only if you ever solve a genuinely large frame. This also took the test suite
+  from 145 s to 30 s.
+- **One artist per member.** The 3D and deflection panels drew a separate line
+  for every member — a few hundred artists to build and render each frame. They
+  are now single `LineCollection`s, and text hinting is off in GUI windows only.
+
+**Not OpenGL.** Matplotlib has no GPU backend, so a GPU path means replacing it
+with pyqtgraph or VisPy: a new dependency, a rewrite of every chart, and the
+loss of the same code producing the report PNGs — all to hardware-accelerate a
+few hundred line segments that were never the bottleneck. If the remaining
+~250 ms redraw ever needs to come down, the next step is blitting the one panel
+that changed, not a new toolkit.
+
 ## Prices — read this
 
 The shipped rates are a **dated snapshot of published Czech list prices**, not a

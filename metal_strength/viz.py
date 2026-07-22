@@ -23,6 +23,7 @@ matplotlib.use("Agg")
 
 import matplotlib.pyplot as plt  # noqa: E402
 import numpy as np  # noqa: E402
+from matplotlib.collections import LineCollection  # noqa: E402
 from matplotlib.colors import LinearSegmentedColormap, Normalize  # noqa: E402
 
 from . import ec3, frame3d, i18n  # noqa: E402
@@ -69,6 +70,9 @@ def interactive(enable: bool = True) -> str | None:
             matplotlib.use(backend, force=True)
         except Exception:  # noqa: BLE001 - missing toolkit, try the next
             continue
+        # Unhinted text renders ~20% faster and only matters on screen, where a
+        # redraw is in the interaction loop. Saved PNGs keep the crisp default.
+        matplotlib.rcParams["text.hinting"] = "none"
         _INTERACTIVE = True
         return backend
     return None
@@ -130,14 +134,14 @@ def _draw_deflected(ax, roof: Roof, results: frame3d.Results,
         peak = max(np.abs(u).max(), 1e-9)
         scale = 0.08 * extent / peak
     moved = nodes + u * scale
-    for m in roof.structure.members:
-        a, b = nodes[m.i], nodes[m.j]
-        ax.plot([a[0] / 1e3, b[0] / 1e3], [a[2] / 1e3, b[2] / 1e3],
-                color="#b0bec5", lw=1, zorder=1)
-        a, b = moved[m.i], moved[m.j]
-        ax.plot([a[0] / 1e3, b[0] / 1e3], [a[2] / 1e3, b[2] / 1e3],
-                color="#c62828", lw=1.8, zorder=2)
+    # One collection per state rather than a line artist per member: a few
+    # hundred separate artists cost far more to build and to render.
+    ij = np.array([(m.i, m.j) for m in roof.structure.members])
+    for pts, color, lw, z in ((nodes, "#b0bec5", 1.0, 1), (moved, "#c62828", 1.8, 2)):
+        xz = pts[:, [0, 2]] / 1e3
+        ax.add_collection(LineCollection(xz[ij], colors=color, linewidths=lw, zorder=z))
     worst = float(np.abs(results.displacements[:, 2]).max())
+    ax.autoscale_view()
     ax.set_aspect("equal")
     ax.set_xlabel("x [m]", fontsize=9)
     ax.set_ylabel("z [m]", fontsize=9)
@@ -149,15 +153,18 @@ def _draw_deflected(ax, roof: Roof, results: frame3d.Results,
 
 def _draw_utilisation_3d(ax, roof: Roof, checks: list[ec3.MemberResult],
                          title: str | None = None) -> None:
+    from mpl_toolkits.mplot3d.art3d import Line3DCollection
+
     # Preserve the viewing angle across redraws so scrubbing a slider does not
     # snap the camera back.
     elev, azim = ax.elev, ax.azim
     ax.clear()
     nodes = np.array([[n.x, n.y, n.z] for n in roof.structure.nodes]) / 1000.0
     utils = np.array([c.utilisation for c in checks])
-    for m, u in zip(roof.structure.members, utils):
-        a, b = nodes[m.i], nodes[m.j]
-        ax.plot(*zip(a, b), color=UTIL_CMAP(UTIL_NORM(u)), lw=3 if u > 1 else 1.8)
+    ij = np.array([(m.i, m.j) for m in roof.structure.members])
+    ax.add_collection3d(Line3DCollection(
+        nodes[ij], colors=UTIL_CMAP(UTIL_NORM(utils)),
+        linewidths=np.where(utils > 1, 3.0, 1.8)))
     ax.set_xlabel("x [m]", fontsize=9)
     ax.set_ylabel("y [m]", fontsize=9)
     ax.set_zlabel("z [m]", fontsize=9)

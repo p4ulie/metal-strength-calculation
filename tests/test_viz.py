@@ -328,3 +328,30 @@ def test_dashboard_editor_accepts_a_drag_and_refuses_nonsense():
         assert w["profile"]().points == before
     finally:
         plt.close(fig)
+
+
+def test_frames_are_drawn_as_collections_not_one_artist_per_member():
+    """A few hundred separate line artists is what made the dashboard sluggish."""
+    import matplotlib.pyplot as plt
+
+    from metal_strength.model import roof
+
+    con = roof(span=12.0, length=20.0, pitch_deg=20.0, rafter="IPE450",
+               column="HEB240", purlin="SHS140x140x5", snow_kn_m2=1.92)
+    results = con.solve()
+    checks = con.check(results)
+    assert len(con.spec.members) > 50, "need a frame big enough for this to matter"
+
+    fig = plt.figure()
+    try:
+        ax = fig.add_subplot()
+        viz._draw_deflected(ax, con, results)
+        assert not ax.lines, "deflected shape should draw no individual lines"
+        assert len(ax.collections) == 2  # undeformed and deformed
+
+        ax3d = fig.add_subplot(projection="3d")
+        viz._draw_utilisation_3d(ax3d, con, checks)
+        assert not ax3d.lines
+        assert len(ax3d.collections) == 1
+    finally:
+        plt.close(fig)
