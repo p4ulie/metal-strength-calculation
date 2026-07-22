@@ -629,7 +629,22 @@ def render_snow_cases(
 
 
 def main() -> None:
-    mcp.run()
+    """stdio by default; ``--http`` serves the same tools over HTTP instead."""
+    import argparse
+
+    ap = argparse.ArgumentParser(prog="metal-strength-mcp")
+    ap.add_argument("--http", action="store_true",
+                    help="serve over HTTP at http://HOST:PORT/mcp instead of stdio")
+    ap.add_argument("--host", default="127.0.0.1")
+    ap.add_argument("--port", type=int, default=8000)
+    a = ap.parse_args()
+
+    if not a.http:
+        mcp.run()
+        return
+    mcp.settings.host, mcp.settings.port = a.host, a.port
+    print(f"metal-strength MCP on http://{a.host}:{a.port}/mcp", flush=True)
+    mcp.run(transport="streamable-http")
 
 
 if __name__ == "__main__":

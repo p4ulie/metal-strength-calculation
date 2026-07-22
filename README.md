@@ -202,6 +202,7 @@ OK   shear z (web)           0.39  137/348 kN   [6.2.6]
 
 ```
 uv run python -m metal_strength.mcp_server        # stdio
+uv run python -m metal_strength.mcp_server --http --port 8000   # http://127.0.0.1:8000/mcp
 uv run python tests/smoke_mcp.py                  # exercise every tool
 ```
 
