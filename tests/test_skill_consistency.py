@@ -264,17 +264,28 @@ def test_the_docs_do_not_offer_flags_that_were_removed():
         assert "metal_strength.viewer" not in text, path
 
 
-def test_every_readme_image_exists():
-    """A broken image is worse than no image: it looks like rot."""
+def test_every_readme_image_is_committed():
+    """Existing on disk is not enough -- GitHub renders what git tracks.
+
+    .gitignore carries a blanket *.png (charts land everywhere), which silently
+    swallowed docs/images and left the README full of broken images while every
+    file was present locally.
+    """
     import re
+    import subprocess
 
     readme = Path("README.md").read_text()
     referenced = re.findall(r"!\[[^\]]*\]\(([^)]+)\)", readme, re.S)
     assert referenced, "the README is meant to show the thing, not only describe it"
+
+    tracked = set(subprocess.run(
+        ["git", "ls-files", "docs/images"], capture_output=True, text=True,
+        check=True).stdout.split())
     for relative in referenced:
         image = Path(relative)
         assert image.exists(), relative
         assert image.stat().st_size > 5_000, f"{relative} looks empty"
+        assert relative in tracked, f"{relative} is not committed -- gitignored?"
 
 
 def test_readme_index_links_resolve():
