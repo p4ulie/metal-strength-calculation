@@ -12,7 +12,13 @@ from .model import pitched_roof, single_beam
 from .sections import get_section, list_sections
 
 
-def _report(roof, out: Path | None, prefix: str, show: bool = False) -> None:
+def _report(roof, out: Path | None, prefix: str, show: bool = False,
+            live: dict | None = None) -> None:
+    """Print the verdict; optionally write PNGs and open one interactive window.
+
+    ``live``, when given, is the set of roof parameters the dashboard needs to
+    rebuild the structure as its sliders move.
+    """
     backend = viz.interactive() if show else None
     if show and backend is None:
         print("note: no GUI toolkit found, charts will only be written to disk.\n"
@@ -41,22 +47,30 @@ def _report(roof, out: Path | None, prefix: str, show: bool = False) -> None:
     print(f"\n=> the structure {verdict} "
           f"(strength {worst.utilisation:.2f}, deflection {defl.utilisation:.2f})")
 
-    if out or show:
-        # Charts are always written; --show additionally opens them in windows.
-        target = out or Path(tempfile.mkdtemp(prefix="metal-strength-"))
+    if out:
+        # Separate PNGs, which is what you want for a report.
         paths = [
-            viz.utilisation_3d(roof, checks, target / f"{prefix}_utilisation.png"),
-            viz.utilisation_bars(checks, target / f"{prefix}_ranking.png"),
-            viz.deflected_shape(roof, results, target / f"{prefix}_deflection.png"),
-            viz.force_diagrams(results, worst_index, target / f"{prefix}_forces.png",
+            viz.utilisation_3d(roof, checks, out / f"{prefix}_utilisation.png"),
+            viz.utilisation_bars(checks, out / f"{prefix}_ranking.png"),
+            viz.deflected_shape(roof, results, out / f"{prefix}_deflection.png"),
+            viz.force_diagrams(results, worst_index, out / f"{prefix}_forces.png",
                                f"Governing member: {worst.section}"),
         ]
         print("\ncharts:")
         for p in paths:
             print(f"  {p}")
-        if backend:
-            print(f"\nopening {len(paths)} windows ({backend}); close them to exit.")
-            viz.show()
+
+    if backend:
+        # One window with all four panels. For a roof it also gets live
+        # sliders; drag the 3D panel to orbit it.
+        if live:
+            viz.dashboard(**live)
+            print(f"\ndashboard open ({backend}). Drag the sliders to re-solve, "
+                  "drag the 3D panel to orbit. Close the window to exit.")
+        else:
+            viz.panel(roof, results, checks, title=prefix)
+            print(f"\nchart window open ({backend}); close it to exit.")
+        viz.show()
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -180,7 +194,13 @@ def main(argv: list[str] | None = None) -> int:
         rafter=a.rafter, column=a.column, purlin=a.purlin, grade=a.grade,
         snow_kn_m2=snow_load, snow_case=a.case,
     )
-    _report(roof_obj, a.out, "roof", a.show)
+    _report(roof_obj, a.out, "roof", a.show, live=dict(
+        span=a.span, length=a.length, pitch_deg=a.pitch, eaves_height=a.eaves_height,
+        frame_spacing=a.frame_spacing, purlin_spacing=a.purlin_spacing,
+        rafter=a.rafter, column=a.column, purlin=a.purlin, grade=a.grade,
+        snow_depth=a.snow_depth if a.snow_depth is not None else 1.0,
+        snow_state=a.snow_state, snow_case=a.case,
+    ))
     return 0
 
 

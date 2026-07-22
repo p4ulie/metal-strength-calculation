@@ -1,12 +1,20 @@
-"""Charts. Headless by default -- every function writes a file and returns its
+"""Charts, and the interactive dashboard.
+
+Headless by default -- every ``*_png`` function writes a file and returns its
 path, so the MCP server and the CLI can hand results back without a display.
 
 Call :func:`interactive` first (the CLI's ``--show`` flag does) to switch to a
-GUI backend and have the figures open in windows as well as being saved.
+GUI backend, then :func:`panel` for one window of subplots, or
+:func:`dashboard` for the same window with live sliders that re-solve the
+structure as you move them.
+
+Every panel is drawn by a ``_draw_*`` helper that takes an axes, so the saved
+PNGs and the on-screen dashboard cannot drift apart.
 """
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import matplotlib
@@ -23,6 +31,13 @@ from .model import Roof  # noqa: E402
 # GUI backends worth trying, best first. Whichever imports wins.
 _GUI_BACKENDS = ("QtAgg", "TkAgg", "GTK4Agg", "GTK3Agg", "WXAgg", "MacOSX")
 _INTERACTIVE = False
+
+# Green through amber to red: utilisation 0 -> 1 -> beyond.
+UTIL_CMAP = LinearSegmentedColormap.from_list(
+    "utilisation", ["#2e7d32", "#9ccc65", "#fdd835", "#fb8c00", "#c62828"]
+)
+# Fixed so a colour means the same thing however the sliders are set.
+UTIL_NORM = Normalize(0.0, 1.5)
 
 
 def interactive(enable: bool = True) -> str | None:
@@ -56,11 +71,6 @@ def show() -> None:
     if _INTERACTIVE:
         plt.show()
 
-# Green through amber to red: utilisation 0 -> 1 -> beyond.
-UTIL_CMAP = LinearSegmentedColormap.from_list(
-    "utilisation", ["#2e7d32", "#9ccc65", "#fdd835", "#fb8c00", "#c62828"]
-)
-
 
 def _out(path: str | Path) -> Path:
     p = Path(path)
@@ -68,29 +78,120 @@ def _out(path: str | Path) -> Path:
     return p
 
 
-def force_diagrams(results: frame3d.Results, member: int, path: str | Path,
-                   title: str = "") -> Path:
-    """Axial, shear and bending moment along one member."""
-    d = results.diagram(member, 201)
-    x = d["x"] / 1000.0  # m
+# --- panel painters ---------------------------------------------------------
+# Each takes an axes and draws into it. Used by both the PNG functions and the
+# dashboard, so there is only ever one version of each chart.
 
-    fig, axes = plt.subplots(3, 1, figsize=(8, 7), sharex=True)
+
+def _draw_forces(axes, results: frame3d.Results, member: int, title: str = "") -> None:
+    d = results.diagram(member, 201)
+    x = d["x"] / 1000.0
     for ax, (key, label, scale, unit) in zip(
         axes,
-        [("N", "Axial N", 1e-3, "kN"), ("Vz", "Shear V", 1e-3, "kN"),
-         ("My", "Moment M", 1e-6, "kNm")],
+        [("N", "N", 1e-3, "kN"), ("Vz", "V", 1e-3, "kN"),
+         ("My", "M", 1e-6, "kNm")],
     ):
+        ax.clear()
         y = np.asarray(d[key]) * scale
         ax.fill_between(x, 0, y, alpha=0.3, color="#1565c0")
         ax.plot(x, y, color="#0d47a1", lw=1.6)
         ax.axhline(0, color="black", lw=0.8)
-        ax.set_ylabel(f"{label} [{unit}]")
+        ax.set_ylabel(f"{label} [{unit}]", fontsize=9)
         ax.grid(alpha=0.3)
+        ax.tick_params(labelsize=8)
         peak = y[np.argmax(np.abs(y))]
-        ax.annotate(f"max {peak:.1f} {unit}", xy=(0.99, 0.9), xycoords="axes fraction",
-                    ha="right", fontsize=9)
-    axes[-1].set_xlabel("distance along member [m]")
-    fig.suptitle(title or f"Member {member} internal actions")
+        ax.annotate(f"max {peak:.1f} {unit}", xy=(0.99, 0.86),
+                    xycoords="axes fraction", ha="right", fontsize=8)
+    axes[0].set_title(title or f"Member {member} internal actions", fontsize=10)
+    axes[-1].set_xlabel("distance along member [m]", fontsize=9)
+
+
+def _draw_deflected(ax, roof: Roof, results: frame3d.Results,
+                    scale: float | None = None) -> None:
+    ax.clear()
+    nodes = np.array([[n.x, n.y, n.z] for n in roof.structure.nodes])
+    u = results.displacements[:, :3]
+    if scale is None:
+        extent = max(nodes.max(0) - nodes.min(0))
+        peak = max(np.abs(u).max(), 1e-9)
+        scale = 0.08 * extent / peak
+    moved = nodes + u * scale
+    for m in roof.structure.members:
+        a, b = nodes[m.i], nodes[m.j]
+        ax.plot([a[0] / 1e3, b[0] / 1e3], [a[2] / 1e3, b[2] / 1e3],
+                color="#b0bec5", lw=1, zorder=1)
+        a, b = moved[m.i], moved[m.j]
+        ax.plot([a[0] / 1e3, b[0] / 1e3], [a[2] / 1e3, b[2] / 1e3],
+                color="#c62828", lw=1.8, zorder=2)
+    worst = float(np.abs(results.displacements[:, 2]).max())
+    ax.set_aspect("equal")
+    ax.set_xlabel("x [m]", fontsize=9)
+    ax.set_ylabel("z [m]", fontsize=9)
+    ax.tick_params(labelsize=8)
+    ax.set_title(f"Deflected shape (x{scale:.0f}) -- peak {worst:.1f} mm", fontsize=10)
+    ax.grid(alpha=0.3)
+
+
+def _draw_utilisation_3d(ax, roof: Roof, checks: list[ec3.MemberResult],
+                         title: str | None = None) -> None:
+    # Preserve the viewing angle across redraws so scrubbing a slider does not
+    # snap the camera back.
+    elev, azim = ax.elev, ax.azim
+    ax.clear()
+    nodes = np.array([[n.x, n.y, n.z] for n in roof.structure.nodes]) / 1000.0
+    utils = np.array([c.utilisation for c in checks])
+    for m, u in zip(roof.structure.members, utils):
+        a, b = nodes[m.i], nodes[m.j]
+        ax.plot(*zip(a, b), color=UTIL_CMAP(UTIL_NORM(u)), lw=3 if u > 1 else 1.8)
+    ax.set_xlabel("x [m]", fontsize=9)
+    ax.set_ylabel("y [m]", fontsize=9)
+    ax.set_zlabel("z [m]", fontsize=9)
+    ax.tick_params(labelsize=7)
+    lo, hi = nodes.min(0), nodes.max(0)
+    # A straight beam is flat in y and z, which would make those axes singular.
+    pad = np.where(hi - lo < 1e-6, max((hi - lo).max(), 1.0) * 0.05, 0.0)
+    lo, hi = lo - pad, hi + pad
+    extent = np.maximum(hi - lo, 1e-6)
+    for setter, a, b in zip((ax.set_xlim, ax.set_ylim, ax.set_zlim), lo, hi):
+        setter(a, b)
+    # Scale the box to the real proportions rather than forcing a cube -- a
+    # 12 x 20 x 5 m roof squeezed into a cube wastes most of the panel.
+    ax.set_box_aspect(tuple(extent / extent.max()))
+    ax.view_init(elev=elev, azim=azim)
+    if title is None:
+        worst = checks[int(np.argmax(utils))]
+        title = (f"worst {utils.max():.2f} in {worst.section} "
+                 f"({worst.governing.name})")
+    if title:
+        ax.set_title(title, fontsize=10)
+
+
+def _draw_ranking(ax, checks: list[ec3.MemberResult], top: int = 12) -> None:
+    ax.clear()
+    ranked = sorted(checks, key=lambda c: -c.utilisation)[:top]
+    utils = [c.utilisation for c in ranked]
+    ax.barh(range(len(ranked)), utils,
+            color=[UTIL_CMAP(UTIL_NORM(u)) for u in utils])
+    ax.set_yticks(range(len(ranked)), [c.section for c in ranked], fontsize=7)
+    ax.invert_yaxis()
+    ax.axvline(1.0, color="#c62828", ls="--", lw=1.5)
+    ax.set_xlabel("utilisation", fontsize=9)
+    ax.set_title(f"Worst {len(ranked)} members", fontsize=10)
+    ax.tick_params(labelsize=8)
+    for i, (u, c) in enumerate(zip(utils, ranked)):
+        ax.text(u + 0.02, i, f"{u:.2f} {c.governing.name}", va="center", fontsize=6)
+    ax.set_xlim(0, max(1.25, max(utils) * 1.35))
+    ax.grid(axis="x", alpha=0.3)
+
+
+# --- single-figure chart files ---------------------------------------------
+
+
+def force_diagrams(results: frame3d.Results, member: int, path: str | Path,
+                   title: str = "") -> Path:
+    """Axial, shear and bending moment along one member."""
+    fig, axes = plt.subplots(3, 1, figsize=(8, 7), sharex=True)
+    _draw_forces(axes, results, member, title)
     fig.tight_layout()
     p = _out(path)
     fig.savefig(p, dpi=130)
@@ -101,28 +202,8 @@ def force_diagrams(results: frame3d.Results, member: int, path: str | Path,
 def deflected_shape(roof: Roof, results: frame3d.Results, path: str | Path,
                     scale: float | None = None) -> Path:
     """Undeformed vs deformed geometry, projected onto the X-Z plane."""
-    nodes = np.array([[n.x, n.y, n.z] for n in roof.structure.nodes])
-    u = results.displacements[:, :3]
-    if scale is None:
-        span = max(nodes.max(0) - nodes.min(0))
-        peak = max(np.abs(u).max(), 1e-9)
-        scale = 0.08 * span / peak
-    moved = nodes + u * scale
-
     fig, ax = plt.subplots(figsize=(9, 5))
-    for m in roof.structure.members:
-        a, b = nodes[m.i], nodes[m.j]
-        ax.plot([a[0] / 1e3, b[0] / 1e3], [a[2] / 1e3, b[2] / 1e3],
-                color="#b0bec5", lw=1, zorder=1)
-        a, b = moved[m.i], moved[m.j]
-        ax.plot([a[0] / 1e3, b[0] / 1e3], [a[2] / 1e3, b[2] / 1e3],
-                color="#c62828", lw=1.8, zorder=2)
-    worst = float(np.abs(results.displacements[:, 2]).max())
-    ax.set_aspect("equal")
-    ax.set_xlabel("x [m]")
-    ax.set_ylabel("z [m]")
-    ax.set_title(f"Deflected shape (x{scale:.0f}) -- peak vertical {worst:.1f} mm")
-    ax.grid(alpha=0.3)
+    _draw_deflected(ax, roof, results, scale)
     fig.tight_layout()
     p = _out(path)
     fig.savefig(p, dpi=130)
@@ -130,37 +211,22 @@ def deflected_shape(roof: Roof, results: frame3d.Results, path: str | Path,
     return p
 
 
-def utilisation_3d(roof: Roof, checks: list[ec3.MemberResult], path: str | Path) -> Path:
+def utilisation_3d(roof: Roof, checks: list[ec3.MemberResult],
+                   path: str | Path) -> Path:
     """The whole structure in 3D, each member coloured by its utilisation."""
-    from mpl_toolkits.mplot3d import Axes3D  # noqa: F401  (registers the projection)
-
-    nodes = np.array([[n.x, n.y, n.z] for n in roof.structure.nodes]) / 1000.0
-    utils = np.array([c.utilisation for c in checks])
-    norm = Normalize(0.0, max(1.0, float(utils.max())))
-
     fig = plt.figure(figsize=(11, 7))
     ax = fig.add_subplot(111, projection="3d")
-    for m, u in zip(roof.structure.members, utils):
-        a, b = nodes[m.i], nodes[m.j]
-        ax.plot(*zip(a, b), color=UTIL_CMAP(norm(u)), lw=3 if u > 1 else 1.8)
-
-    ax.set_xlabel("x [m]")
-    ax.set_ylabel("y [m]")
-    ax.set_zlabel("z [m]")
-    lo, hi = nodes.min(0), nodes.max(0)
-    mid, rng = (lo + hi) / 2, (hi - lo).max() / 2
-    for setter, c in zip((ax.set_xlim, ax.set_ylim, ax.set_zlim), mid):
-        setter(c - rng, c + rng)
-
-    sm = plt.cm.ScalarMappable(cmap=UTIL_CMAP, norm=norm)
-    cb = fig.colorbar(sm, ax=ax, shrink=0.65, pad=0.1)
-    cb.set_label("utilisation (1.0 = at capacity)")
+    utils = np.array([c.utilisation for c in checks])
     worst = checks[int(np.argmax(utils))]
-    ax.set_title(
+    _draw_utilisation_3d(
+        ax, roof, checks,
         f"{roof.span:.0f} x {roof.length:.0f} m roof, {roof.pitch_deg:.0f}deg, "
         f"snow {roof.snow_kn_m2:.1f} kN/m2 ({roof.snow_case})\n"
-        f"worst {utils.max():.2f} in {worst.section} ({worst.governing.name})"
+        f"worst {utils.max():.2f} in {worst.section} ({worst.governing.name})",
     )
+    cb = fig.colorbar(plt.cm.ScalarMappable(cmap=UTIL_CMAP, norm=UTIL_NORM),
+                      ax=ax, shrink=0.65, pad=0.1)
+    cb.set_label("utilisation (1.0 = at capacity)")
     fig.tight_layout()
     p = _out(path)
     fig.savefig(p, dpi=130)
@@ -171,22 +237,9 @@ def utilisation_3d(roof: Roof, checks: list[ec3.MemberResult], path: str | Path)
 def utilisation_bars(checks: list[ec3.MemberResult], path: str | Path,
                      top: int = 20) -> Path:
     """The worst members as a ranked bar chart -- what to resize first."""
-    ranked = sorted(checks, key=lambda c: -c.utilisation)[:top]
-    labels = [c.section for c in ranked]
-    utils = [c.utilisation for c in ranked]
-    colors = [UTIL_CMAP(min(u, 1.5) / 1.5) for u in utils]
-
-    fig, ax = plt.subplots(figsize=(9, 0.35 * len(ranked) + 2))
-    ax.barh(range(len(ranked)), utils, color=colors)
-    ax.set_yticks(range(len(ranked)), labels, fontsize=8)
-    ax.invert_yaxis()
-    ax.axvline(1.0, color="#c62828", ls="--", lw=1.5)
-    ax.set_xlabel("utilisation")
-    ax.set_title(f"Worst {len(ranked)} members (dashed line = capacity)")
-    for i, (u, c) in enumerate(zip(utils, ranked)):
-        ax.text(u + 0.02, i, f"{u:.2f} {c.governing.name}", va="center", fontsize=7)
-    ax.set_xlim(0, max(1.2, max(utils) * 1.35))
-    ax.grid(axis="x", alpha=0.3)
+    n = min(top, len(checks))
+    fig, ax = plt.subplots(figsize=(9, 0.35 * n + 2))
+    _draw_ranking(ax, checks, top)
     fig.tight_layout()
     p = _out(path)
     fig.savefig(p, dpi=130)
@@ -225,3 +278,188 @@ def snow_cases(sk: float, pitch_deg: float, path: str | Path) -> Path:
     fig.savefig(p, dpi=130)
     _finish(fig)
     return p
+
+
+# --- one window, four panels ------------------------------------------------
+
+
+def _layout(fig, controls: bool):
+    """Build the shared 2x2-ish panel layout. Returns (ax3d, axdef, axforce, axbar)."""
+    bottom = 0.20 if controls else 0.06
+    gs = fig.add_gridspec(2, 2, left=0.05, right=0.97, top=0.88, bottom=bottom,
+                          hspace=0.32, wspace=0.22)
+    ax3d = fig.add_subplot(gs[0, 0], projection="3d")
+    axbar = fig.add_subplot(gs[0, 1])
+    axdef = fig.add_subplot(gs[1, 0])
+    inner = gs[1, 1].subgridspec(3, 1, hspace=0.12)
+    axforce = [fig.add_subplot(inner[k]) for k in range(3)]
+    for a in axforce[:-1]:
+        a.tick_params(labelbottom=False)
+    return ax3d, axdef, axforce, axbar
+
+
+def _paint(axes, roof: Roof, results: frame3d.Results,
+           checks: list[ec3.MemberResult]) -> ec3.MemberResult:
+    """Draw all four panels. Returns the governing member."""
+    ax3d, axdef, axforce, axbar = axes
+    worst = max(checks, key=lambda c: c.utilisation)
+    _draw_utilisation_3d(ax3d, roof, checks, title="")
+    _draw_ranking(axbar, checks)
+    _draw_deflected(axdef, roof, results)
+    _draw_forces(axforce, results, checks.index(worst), f"{worst.section}")
+    return worst
+
+
+def _headline(roof: Roof, checks: list[ec3.MemberResult],
+              defl: ec3.Check, worst: ec3.MemberResult) -> str:
+    ok = all(c.ok for c in checks) and defl.ok
+    return (f"{'PASSES' if ok else 'FAILS'}   strength {worst.utilisation:.2f} "
+            f"({worst.governing.name})   deflection {defl.utilisation:.2f}"
+            f"   |   snow {roof.snow_kn_m2:.2f} kN/m$^2$")
+
+
+def panel(roof: Roof, results: frame3d.Results, checks: list[ec3.MemberResult],
+          title: str = ""):
+    """All four charts in a single window. Static -- see :func:`dashboard` for live."""
+    fig = plt.figure(figsize=(15, 9))
+    axes = _layout(fig, controls=False)
+    worst = _paint(axes, roof, results, checks)
+    defl = roof.deflection(results)
+    fig.colorbar(plt.cm.ScalarMappable(cmap=UTIL_CMAP, norm=UTIL_NORM),
+                 ax=axes[0], shrink=0.6, pad=0.12, label="utilisation")
+    fig.suptitle(f"{title}\n{_headline(roof, checks, defl, worst)}"
+                 if title else _headline(roof, checks, defl, worst), fontsize=12)
+    return fig
+
+
+# --- the live dashboard -----------------------------------------------------
+
+
+def _ladder(name: str) -> tuple[list[str], int]:
+    """Profiles in the same family as ``name``, ordered by size, and its index."""
+    from .sections import get_section, list_sections
+
+    family = re.match(r"^[A-Za-z]+", name.upper())
+    prefix = family.group(0) if family else "IPE"
+    names = list_sections(prefix)
+    names.sort(key=lambda n: (get_section(n).h, get_section(n).A))
+    canonical = get_section(name).name
+    return names, names.index(canonical) if canonical in names else 0
+
+
+def dashboard(
+    span: float = 12.0,
+    length: float = 20.0,
+    pitch_deg: float = 20.0,
+    rafter: str = "IPE450",
+    column: str = "HEB240",
+    purlin: str = "SHS140x140x5",
+    grade: str = "S235",
+    snow_depth: float = 1.0,
+    snow_state: str = "wet",
+    **roof_kwargs,
+):
+    """One window with live controls: scrub the snow, step the sections, re-solve.
+
+    Sliders move within the same profile family as the section they start from,
+    ordered by depth, so ``rafter="IPE450"`` steps through the IPE range. Drag
+    the 3D panel to orbit it -- mplot3d handles that natively.
+
+    Every distinct combination is solved once and cached, so going back to a
+    setting you have already tried is instant.
+    """
+    from matplotlib.widgets import RadioButtons, Slider
+
+    from . import loads
+    from .model import pitched_roof
+
+    states = list(loads.SNOW_DENSITY)
+    ladders = {k: _ladder(v) for k, v in
+               (("rafter", rafter), ("column", column), ("purlin", purlin))}
+
+    fig = plt.figure(figsize=(15, 9.5))
+    axes = _layout(fig, controls=True)
+    fig.colorbar(plt.cm.ScalarMappable(cmap=UTIL_CMAP, norm=UTIL_NORM),
+                 ax=axes[0], shrink=0.6, pad=0.12, label="utilisation")
+
+    cache: dict[tuple, tuple] = {}
+
+    def solve(depth: float, state: str, sections: dict[str, str]):
+        key = (round(depth, 2), state, *sections.values())
+        if key not in cache:
+            sk = loads.snow_from_depth(key[0], state)
+            snow = loads.roof_snow_load(sk, pitch_deg)[0].left
+            roof = pitched_roof(span=span, length=length, pitch_deg=pitch_deg,
+                                rafter=sections["rafter"], column=sections["column"],
+                                purlin=sections["purlin"], grade=grade,
+                                snow_kn_m2=snow, **roof_kwargs)
+            results = roof.solve()
+            cache[key] = (roof, results, roof.check(results))
+        return cache[key]
+
+    # -- controls -------------------------------------------------------------
+    ax_depth = fig.add_axes([0.13, 0.115, 0.28, 0.025])
+    s_depth = Slider(ax_depth, "snow depth [m]", 0.0, 3.0, valinit=snow_depth,
+                     valstep=0.05, color="#90caf9")
+
+    ax_state = fig.add_axes([0.46, 0.02, 0.10, 0.13])
+    ax_state.set_title("snow state", fontsize=9)
+    r_state = RadioButtons(ax_state, states, active=states.index(snow_state))
+
+    sliders = {}
+    for i, role in enumerate(("rafter", "column", "purlin")):
+        names, idx = ladders[role]
+        ax = fig.add_axes([0.66, 0.115 - i * 0.042, 0.28, 0.022])
+        sliders[role] = Slider(ax, role, 0, len(names) - 1, valinit=idx,
+                               valstep=1, color="#a5d6a7")
+        sliders[role].valtext.set_text(names[idx])
+
+    def current_sections() -> dict[str, str]:
+        out = {}
+        for role, slider in sliders.items():
+            names, _ = ladders[role]
+            name = names[int(slider.val)]
+            slider.valtext.set_text(name)
+            out[role] = name
+        return out
+
+    def redraw(_=None) -> None:
+        sections = current_sections()
+        roof, results, checks = solve(s_depth.val, r_state.value_selected, sections)
+        worst = _paint(axes, roof, results, checks)
+        defl = roof.deflection(results)
+        fig.suptitle(
+            f"{span:.0f} x {length:.0f} m roof at {pitch_deg:.0f}deg, {grade}   |   "
+            f"{s_depth.val:.2f} m {r_state.value_selected} snow\n"
+            f"{_headline(roof, checks, defl, worst)}", fontsize=12)
+        fig.canvas.draw_idle()
+
+    # Re-solving on every step of a drag would stutter, so while the mouse is
+    # down just update the labels and defer the solve to the release. A click
+    # on the track, or a programmatic set_val, redraws straight away.
+    all_sliders = [s_depth, *sliders.values()]
+    dirty = {"flag": False}
+
+    def on_change(_=None) -> None:
+        for role, slider in sliders.items():
+            slider.valtext.set_text(ladders[role][0][int(slider.val)])
+        if any(s.drag_active for s in all_sliders):
+            dirty["flag"] = True
+            fig.canvas.draw_idle()
+        else:
+            redraw()
+
+    def on_release(event) -> None:
+        if dirty["flag"]:
+            dirty["flag"] = False
+            redraw()
+
+    for slider in all_sliders:
+        slider.on_changed(on_change)
+    r_state.on_clicked(lambda _: redraw())
+    fig.canvas.mpl_connect("button_release_event", on_release)
+
+    # Keep references alive; matplotlib drops widgets that are only local.
+    fig._ms_widgets = (s_depth, r_state, sliders)
+    redraw()
+    return fig
