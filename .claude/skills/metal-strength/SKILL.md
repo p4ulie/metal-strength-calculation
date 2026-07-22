@@ -50,9 +50,10 @@ ranked bar chart of the worst members. Reach for a chart when the user asks
 *where* or *why* something fails, not just whether it does.
 
 Or the MCP server (`python -m metal_strength.mcp_server`): `check_beam`,
-`check_rod_buckling`, `check_roof`, `solve_frame`, `snow_load_from_depth`,
-`snow_load_eurocode`, `section_properties`, `list_sections`,
-`render_snow_cases`. Pass `charts=True` to get image paths back.
+`check_rod_buckling`, `check_roof`, `solve_frame`, `propose_construction`,
+`material_list`, `snow_load_from_depth`, `snow_load_eurocode`,
+`section_properties`, `list_sections`, `render_snow_cases`. Pass
+`charts=True` to get image paths back.
 
 `solve_frame` takes an arbitrary structure as JSON (nodes in metres, loads in
 kN, global Z up) — use it when the shape is not a standard pitched roof.
