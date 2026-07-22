@@ -36,6 +36,10 @@ uv run python -m metal_strength.cli beam --span 6 --section IPE200 --udl 5 --sho
 | Output | `viz.py` | charts as PNGs, one window, or a live dashboard |
 | LLM access | `mcp_server.py` | MCP over stdio, 12 tools |
 
+There is a `./ms` wrapper in the repo carrying the parameters worth not
+retyping (`./ms`, `./ms design --cost`, `./ms serve --http --show`). Anything
+you pass overrides its defaults.
+
 ## Roof shapes
 
 `--shape` picks the profile; the frame, the purlins, the columns under every
@@ -230,7 +234,7 @@ It has to be one process. matplotlib's GUI can only be touched from the thread
 running its event loop, so the main thread keeps the window, the server runs
 beside it on a daemon thread, and a tool call posts its change through a queue
 and waits for the main thread to apply it. Two processes cannot do this at all:
-a separate `./roof --show` and a separate server hold two unrelated roofs in two
+a separate `./ms --show` and a separate server hold two unrelated roofs in two
 memories, and no tool call will ever move that window.
 
 ### Tuning a roof remotely
