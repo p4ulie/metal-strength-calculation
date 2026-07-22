@@ -18,6 +18,56 @@ import numpy as np
 from .model import pitched_roof
 
 
+class _Text:
+    """Uniform text renderer over whichever pygame font API actually works.
+
+    Some pygame builds (e.g. 2.6.1 on Python 3.14) ship no compiled SDL_ttf
+    module, so ``pygame.font`` falls back to a pure-Python file that has a
+    circular import with ``pygame.sysfont`` -- importing either one raises.
+    The ``_freetype`` C extension is unaffected, so try the public API first
+    and drop to that. Both load pygame's own bundled TTF rather than going
+    through SysFont, which is the part that breaks.
+    """
+
+    def __init__(self, size: int, bold: bool = False) -> None:
+        import os
+
+        import pygame
+
+        ttf = os.path.join(os.path.dirname(pygame.__file__), "freesansbold.ttf")
+        self._mode = None
+        try:
+            import pygame.font
+
+            self._font = pygame.font.Font(ttf, size)
+            self._mode = "font"
+            self.height = self._font.get_height()
+        except Exception:  # noqa: BLE001 - any import/init failure means try the next
+            try:
+                import pygame._freetype as freetype
+
+                freetype.init()
+                self._font = freetype.Font(ttf, size)
+                self._font.strong = bold
+                self._mode = "freetype"
+                self.height = self._font.get_sized_height()
+            except Exception:  # noqa: BLE001
+                self._font = None
+                self.height = size + 4
+        self._bold = bold
+
+    @property
+    def available(self) -> bool:
+        return self._font is not None
+
+    def render(self, text: str, colour: tuple[int, int, int]):
+        if self._mode == "font":
+            return self._font.render(text, True, colour)
+        if self._mode == "freetype":
+            return self._font.render(text, colour)[0]
+        return None
+
+
 def _colour(utilisation: float) -> tuple[int, int, int]:
     """Green -> amber -> red, matching viz.UTIL_CMAP closely enough."""
     u = min(max(utilisation, 0.0), 1.5) / 1.5
@@ -42,6 +92,9 @@ def _project(pts: np.ndarray, yaw: float, pitch: float, zoom: float,
 
 def run(span: float, length: float, pitch_deg: float, rafter: str, column: str,
         purlin: str, snow_depth: float, snow_state: str) -> int:
+    import os
+
+    os.environ.setdefault("PYGAME_HIDE_SUPPORT_PROMPT", "1")
     try:
         import pygame
     except ImportError:
@@ -56,8 +109,11 @@ def run(span: float, length: float, pitch_deg: float, rafter: str, column: str,
     size = (1100, 720)
     screen = pygame.display.set_mode(size, pygame.RESIZABLE)
     pygame.display.set_caption("metal-strength roof viewer")
-    font = pygame.font.SysFont("monospace", 15)
-    big = pygame.font.SysFont("monospace", 19, bold=True)
+    font = _Text(15)
+    big = _Text(19, bold=True)
+    if not font.available:
+        print("note: no usable pygame font module, drawing without labels",
+              file=sys.stderr)
     clock = pygame.time.Clock()
 
     yaw, pitch_cam, zoom = math.radians(-55), math.radians(22), 34.0
@@ -139,8 +195,10 @@ def run(span: float, length: float, pitch_deg: float, rafter: str, column: str,
         ]
         y = 12
         for f, text, colour in lines:
-            screen.blit(f.render(text, True, colour), (14, y))
-            y += f.get_height() + 4
+            surface = f.render(text, colour)
+            if surface is not None:
+                screen.blit(surface, (14, y))
+            y += f.height + 4
 
         pygame.display.flip()
         clock.tick(60)

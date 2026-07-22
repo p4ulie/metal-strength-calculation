@@ -111,6 +111,11 @@ uv run python -m metal_strength.viewer --span 12 --length 20 --pitch 20
 Drag to orbit, scroll to zoom, arrow keys change the snow depth and the model
 re-solves live.
 
+Some pygame builds (2.6.1 on Python 3.14) ship no compiled SDL_ttf module,
+which leaves a circular import between the pure-Python `pygame.font` and
+`pygame.sysfont`. The viewer detects this and falls back to the `_freetype`
+extension, then to drawing without labels — it will not crash on it.
+
 ## Limitations — read before trusting a number
 
 - **Not a substitute for a licensed structural engineer.** Indicative checks only.
