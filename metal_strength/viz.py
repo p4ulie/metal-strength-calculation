@@ -25,12 +25,26 @@ import matplotlib.pyplot as plt  # noqa: E402
 import numpy as np  # noqa: E402
 from matplotlib.colors import LinearSegmentedColormap, Normalize  # noqa: E402
 
-from . import ec3, frame3d  # noqa: E402
+from . import ec3, frame3d, i18n  # noqa: E402
 from .model import Roof  # noqa: E402
 
 # GUI backends worth trying, best first. Whichever imports wins.
 _GUI_BACKENDS = ("QtAgg", "TkAgg", "GTK4Agg", "GTK3Agg", "WXAgg", "MacOSX")
 _INTERACTIVE = False
+
+# Language for chart text. The CLI sets it from --lang before drawing.
+# ponytail: module global, not a parameter on nine drawing functions -- one
+# process draws in one language. Thread it through if that stops being true.
+LANG = "en"
+
+
+def _L(key: str) -> str:
+    return i18n.t(key, LANG)
+
+
+def _label(check: ec3.MemberResult) -> str:
+    return i18n.member_label(check.section, LANG)
+
 
 # Green through amber to red: utilisation 0 -> 1 -> beyond.
 UTIL_CMAP = LinearSegmentedColormap.from_list(
@@ -100,10 +114,10 @@ def _draw_forces(axes, results: frame3d.Results, member: int, title: str = "") -
         ax.grid(alpha=0.3)
         ax.tick_params(labelsize=8)
         peak = y[np.argmax(np.abs(y))]
-        ax.annotate(f"max {peak:.1f} {unit}", xy=(0.99, 0.86),
+        ax.annotate(f"{_L('max')} {peak:.1f} {unit}", xy=(0.99, 0.86),
                     xycoords="axes fraction", ha="right", fontsize=8)
-    axes[0].set_title(title or f"Member {member} internal actions", fontsize=10)
-    axes[-1].set_xlabel("distance along member [m]", fontsize=9)
+    axes[0].set_title(title or f"{member}: {_L('internal_actions')}", fontsize=10)
+    axes[-1].set_xlabel(_L("along_member"), fontsize=9)
 
 
 def _draw_deflected(ax, roof: Roof, results: frame3d.Results,
@@ -128,7 +142,8 @@ def _draw_deflected(ax, roof: Roof, results: frame3d.Results,
     ax.set_xlabel("x [m]", fontsize=9)
     ax.set_ylabel("z [m]", fontsize=9)
     ax.tick_params(labelsize=8)
-    ax.set_title(f"Deflected shape (x{scale:.0f}) -- peak {worst:.1f} mm", fontsize=10)
+    ax.set_title(f"{_L('deflected_shape')} (x{scale:.0f}) -- "
+                 f"{_L('peak')} {worst:.1f} mm", fontsize=10)
     ax.grid(alpha=0.3)
 
 
@@ -160,7 +175,7 @@ def _draw_utilisation_3d(ax, roof: Roof, checks: list[ec3.MemberResult],
     ax.view_init(elev=elev, azim=azim)
     if title is None:
         worst = checks[int(np.argmax(utils))]
-        title = (f"worst {utils.max():.2f} in {worst.section} "
+        title = (f"{_L('worst')} {utils.max():.2f} {_L('in')} {_label(worst)} "
                  f"({worst.governing.name})")
     if title:
         ax.set_title(title, fontsize=10)
@@ -172,11 +187,11 @@ def _draw_ranking(ax, checks: list[ec3.MemberResult], top: int = 12) -> None:
     utils = [c.utilisation for c in ranked]
     ax.barh(range(len(ranked)), utils,
             color=[UTIL_CMAP(UTIL_NORM(u)) for u in utils])
-    ax.set_yticks(range(len(ranked)), [c.section for c in ranked], fontsize=7)
+    ax.set_yticks(range(len(ranked)), [_label(c) for c in ranked], fontsize=7)
     ax.invert_yaxis()
     ax.axvline(1.0, color="#c62828", ls="--", lw=1.5)
-    ax.set_xlabel("utilisation", fontsize=9)
-    ax.set_title(f"Worst {len(ranked)} members", fontsize=10)
+    ax.set_xlabel(_L("utilisation"), fontsize=9)
+    ax.set_title(f"{_L('worst_members')} ({len(ranked)})", fontsize=10)
     ax.tick_params(labelsize=8)
     for i, (u, c) in enumerate(zip(utils, ranked)):
         ax.text(u + 0.02, i, f"{u:.2f} {c.governing.name}", va="center", fontsize=6)
@@ -267,12 +282,12 @@ def snow_cases(sk: float, pitch_deg: float, path: str | Path) -> Path:
                             color="#90caf9", edgecolor="#1565c0")
             ax.text((x0 + x1) / 2, max(zs) + h + 0.03, f"{s:.2f}",
                     ha="center", fontsize=9)
-        ax.set_title(case.name, fontsize=10)
+        ax.set_title(i18n.snow_term(case.name, LANG), fontsize=10)
         ax.set_xticks([])
         ax.set_ylim(-0.05, rise + 0.55)
-    axes[0].set_ylabel("kN/m$^2$ (to scale)")
-    fig.suptitle(f"EN 1991-1-3 snow arrangements -- sk={sk:.2f} kN/m2, "
-                 f"pitch {pitch_deg:.0f}deg")
+    axes[0].set_ylabel(f"kN/m$^2$ ({_L('to_scale')})")
+    fig.suptitle(f"{_L('snow_arrangements')} -- sk={sk:.2f} kN/m2, "
+                 f"{_L('pitch')} {pitch_deg:.0f}deg")
     fig.tight_layout()
     p = _out(path)
     fig.savefig(p, dpi=130)
@@ -306,16 +321,16 @@ def _paint(axes, roof: Roof, results: frame3d.Results,
     _draw_utilisation_3d(ax3d, roof, checks, title="")
     _draw_ranking(axbar, checks)
     _draw_deflected(axdef, roof, results)
-    _draw_forces(axforce, results, checks.index(worst), f"{worst.section}")
+    _draw_forces(axforce, results, checks.index(worst), _label(worst))
     return worst
 
 
 def _headline(roof: Roof, checks: list[ec3.MemberResult],
               defl: ec3.Check, worst: ec3.MemberResult) -> str:
     ok = all(c.ok for c in checks) and defl.ok
-    return (f"{'PASSES' if ok else 'FAILS'}   strength {worst.utilisation:.2f} "
-            f"({worst.governing.name})   deflection {defl.utilisation:.2f}"
-            f"   |   snow {roof.snow_kn_m2:.2f} kN/m$^2$")
+    return (f"{i18n.verdict(ok, LANG)}   {_L('strength')} {worst.utilisation:.2f} "
+            f"({worst.governing.name})   {_L('deflection')} {defl.utilisation:.2f}"
+            f"   |   {_L('snow')} {roof.snow_kn_m2:.2f} kN/m$^2$")
 
 
 def panel(roof: Roof, results: frame3d.Results, checks: list[ec3.MemberResult],
@@ -326,7 +341,7 @@ def panel(roof: Roof, results: frame3d.Results, checks: list[ec3.MemberResult],
     worst = _paint(axes, roof, results, checks)
     defl = roof.deflection(results)
     fig.colorbar(plt.cm.ScalarMappable(cmap=UTIL_CMAP, norm=UTIL_NORM),
-                 ax=axes[0], shrink=0.6, pad=0.12, label="utilisation")
+                 ax=axes[0], shrink=0.6, pad=0.12, label=_L("utilisation"))
     fig.suptitle(f"{title}\n{_headline(roof, checks, defl, worst)}"
                  if title else _headline(roof, checks, defl, worst), fontsize=12)
     return fig
@@ -380,7 +395,7 @@ def dashboard(
     fig = plt.figure(figsize=(15, 9.5))
     axes = _layout(fig, controls=True)
     fig.colorbar(plt.cm.ScalarMappable(cmap=UTIL_CMAP, norm=UTIL_NORM),
-                 ax=axes[0], shrink=0.6, pad=0.12, label="utilisation")
+                 ax=axes[0], shrink=0.6, pad=0.12, label=_L("utilisation"))
 
     cache: dict[tuple, tuple] = {}
 
@@ -399,18 +414,22 @@ def dashboard(
 
     # -- controls -------------------------------------------------------------
     ax_depth = fig.add_axes([0.13, 0.115, 0.28, 0.025])
-    s_depth = Slider(ax_depth, "snow depth [m]", 0.0, 3.0, valinit=snow_depth,
+    s_depth = Slider(ax_depth, _L("snow_depth"), 0.0, 3.0, valinit=snow_depth,
                      valstep=0.05, color="#90caf9")
 
     ax_state = fig.add_axes([0.46, 0.02, 0.10, 0.13])
-    ax_state.set_title("snow state", fontsize=9)
-    r_state = RadioButtons(ax_state, states, active=states.index(snow_state))
+    ax_state.set_title(_L("snow_state"), fontsize=9)
+    # Radio labels are translated; map the label back to the identifier the
+    # load model expects.
+    state_labels = {i18n.snow_term(st, LANG): st for st in states}
+    r_state = RadioButtons(ax_state, list(state_labels),
+                           active=states.index(snow_state))
 
     sliders = {}
     for i, role in enumerate(("rafter", "column", "purlin")):
         names, idx = ladders[role]
         ax = fig.add_axes([0.66, 0.115 - i * 0.042, 0.28, 0.022])
-        sliders[role] = Slider(ax, role, 0, len(names) - 1, valinit=idx,
+        sliders[role] = Slider(ax, i18n.role(role, LANG), 0, len(names) - 1, valinit=idx,
                                valstep=1, color="#a5d6a7")
         sliders[role].valtext.set_text(names[idx])
 
@@ -425,12 +444,13 @@ def dashboard(
 
     def redraw(_=None) -> None:
         sections = current_sections()
-        roof, results, checks = solve(s_depth.val, r_state.value_selected, sections)
+        state = state_labels[r_state.value_selected]
+        roof, results, checks = solve(s_depth.val, state, sections)
         worst = _paint(axes, roof, results, checks)
         defl = roof.deflection(results)
         fig.suptitle(
-            f"{span:.0f} x {length:.0f} m roof at {pitch_deg:.0f}deg, {grade}   |   "
-            f"{s_depth.val:.2f} m {r_state.value_selected} snow\n"
+            f"{span:.0f} x {length:.0f} {_L('roof_at')} {pitch_deg:.0f}deg, {grade}"
+            f"   |   {_L('snow')} {s_depth.val:.2f} m, {r_state.value_selected}\n"
             f"{_headline(roof, checks, defl, worst)}", fontsize=12)
         fig.canvas.draw_idle()
 

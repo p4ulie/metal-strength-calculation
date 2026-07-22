@@ -204,20 +204,27 @@ table written by hand was wrong in four of five columns, and one recalled
 catalogue `Iz` was 3 % off. Both surfaced only because the tables are compared
 against the implementation.
 
-## Interactive viewer
+## Charts and the live dashboard
+
+`--out DIR` writes PNGs (utilisation in 3D, ranking, deflected shape, force
+diagrams). `--show` opens one window instead. Both work on `beam`, `roof` and
+`design`, and can be combined:
 
 ```
-uv pip install 'metal-strength[viewer]'
-uv run python -m metal_strength.viewer --span 12 --length 20 --pitch 20
+uv run python -m metal_strength.cli roof --span 12 --length 20 --pitch 20 \
+    --snow-depth 1.0 --snow-state wet --out out --show
 ```
 
-Drag to orbit, scroll to zoom, arrow keys change the snow depth and the model
-re-solves live.
+On `roof`, `--show` gets sliders: drag them and the frame re-solves live; drag
+the 3D panel to orbit. Close the window to exit.
 
-Some pygame builds (2.6.1 on Python 3.14) ship no compiled SDL_ttf module,
-which leaves a circular import between the pure-Python `pygame.font` and
-`pygame.sysfont`. The viewer detects this and falls back to the `_freetype`
-extension, then to drawing without labels — it will not crash on it.
+Chart text follows `--lang` (titles, axes, verdict, member roles). Profile
+names, steel grades and Eurocode clause references stay in EN form, as
+everywhere else.
+
+Charts render headless by default (matplotlib `Agg`). `--show` picks the first
+GUI backend that imports; if none does it says so and falls back to writing
+files, so install one — `uv pip install pyqt6`.
 
 ## Prices — read this
 

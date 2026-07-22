@@ -28,6 +28,18 @@ ROLES: dict[str, dict[str, str]] = {
     "tie": {"en": "tie", "sk": "tiahlo", "cs": "táhlo"},
 }
 
+# Snow states and EN 1991-1-3 load arrangements. Keys are the identifiers used
+# on the command line and in the code; these are display forms only.
+SNOW_TERMS: dict[str, dict[str, str]] = {
+    "fresh": {"en": "fresh", "sk": "čerstvý", "cs": "čerstvý"},
+    "settled": {"en": "settled", "sk": "uľahnutý", "cs": "ulehlý"},
+    "old": {"en": "old", "sk": "starý", "cs": "starý"},
+    "wet": {"en": "wet", "sk": "mokrý", "cs": "mokrý"},
+    "balanced": {"en": "balanced", "sk": "rovnomerné", "cs": "rovnoměrné"},
+    "drift_left": {"en": "drift_left", "sk": "závej vľavo", "cs": "závěj vlevo"},
+    "drift_right": {"en": "drift_right", "sk": "závej vpravo", "cs": "závěj vpravo"},
+}
+
 MESSAGES: dict[str, dict[str, str]] = {
     # -- material list columns
     "role": {"en": "role", "sk": "prvok", "cs": "prvek"},
@@ -87,6 +99,30 @@ MESSAGES: dict[str, dict[str, str]] = {
                       "cs": "nejvíce zatížené prvky"},
     "material_list": {"en": "MATERIAL LIST", "sk": "VÝKAZ MATERIÁLU",
                       "cs": "VÝKAZ MATERIÁLU"},
+    # -- chart labels
+    "internal_actions": {"en": "internal actions", "sk": "vnútorné sily",
+                         "cs": "vnitřní síly"},
+    "along_member": {"en": "distance along member [m]",
+                     "sk": "vzdialenosť po prvku [m]",
+                     "cs": "vzdálenost po prvku [m]"},
+    "max": {"en": "max", "sk": "max", "cs": "max"},
+    "deflected_shape": {"en": "deflected shape", "sk": "deformovaný tvar",
+                        "cs": "deformovaný tvar"},
+    "peak": {"en": "peak", "sk": "max", "cs": "max"},
+    "worst": {"en": "worst", "sk": "najhoršie", "cs": "nejhorší"},
+    "in": {"en": "in", "sk": "v prvku", "cs": "v prvku"},
+    "strength": {"en": "strength", "sk": "únosnosť", "cs": "únosnost"},
+    "snow": {"en": "snow", "sk": "sneh", "cs": "sníh"},
+    "snow_depth": {"en": "snow depth [m]", "sk": "výška snehu [m]",
+                   "cs": "výška sněhu [m]"},
+    "snow_state": {"en": "snow state", "sk": "stav snehu", "cs": "stav sněhu"},
+    "roof_at": {"en": "m roof at", "sk": "m strecha so sklonom",
+                "cs": "m střecha se sklonem"},
+    "to_scale": {"en": "to scale", "sk": "v mierke", "cs": "v měřítku"},
+    "snow_arrangements": {"en": "EN 1991-1-3 snow arrangements",
+                          "sk": "Zaťaženie snehom podľa EN 1991-1-3",
+                          "cs": "Zatížení sněhem podle EN 1991-1-3"},
+    "pitch": {"en": "pitch", "sk": "sklon", "cs": "sklon"},
     # -- design solver
     "proposal": {"en": "PROPOSED CONSTRUCTION", "sk": "NAVRHNUTÁ KONŠTRUKCIA",
                  "cs": "NAVRŽENÁ KONSTRUKCE"},
@@ -143,6 +179,17 @@ def translate_tag(tag: str, lang: str = "en") -> str:
     head, _, rest = tag.partition(" ")
     translated = role(head, lang)
     return f"{translated} {rest}".rstrip() if rest else translated
+
+
+def snow_term(name: str, lang: str = "en") -> str:
+    """Display form of a snow state or load arrangement; unknown names pass through."""
+    return SNOW_TERMS.get(name, {}).get(lang, name)
+
+
+def member_label(section: str, lang: str = "en") -> str:
+    """Translate the role inside a member label: ``IPE300 [S235] rafter R f1``."""
+    head, sep, rest = section.partition("] ")
+    return f"{head}{sep}{translate_tag(rest, lang)}" if sep else section
 
 
 def verdict(ok: bool, lang: str = "en") -> str:

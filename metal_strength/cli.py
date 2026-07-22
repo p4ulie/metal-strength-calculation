@@ -42,6 +42,7 @@ def _report(roof, out: Path | None, prefix: str, show: bool = False,
     ``live``, when given, is the set of roof parameters the dashboard needs to
     rebuild the structure as its sliders move.
     """
+    viz.LANG = getattr(roof, "_lang", "en")
     backend = viz.interactive() if show else None
     if show and backend is None:
         print("note: no GUI toolkit found, charts will only be written to disk.\n"
@@ -61,8 +62,7 @@ def _report(roof, out: Path | None, prefix: str, show: bool = False,
     print(f"\n{i18n.t('worst_members', lang)}:")
     for c in ranked[:5]:
         flag = "OK  " if c.ok else "FAIL"
-        head, sep, rest = c.section.partition("] ")
-        label = f"{head}{sep}{i18n.translate_tag(rest, lang)}" if sep else c.section
+        label = i18n.member_label(c.section, lang)
         print(f"  {flag} {c.utilisation:5.2f}  {label:<24s} {c.governing.name}")
 
     print()
