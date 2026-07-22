@@ -394,6 +394,24 @@ Charts render headless by default (matplotlib `Agg`). `--show` picks the first
 GUI backend that imports; if none does it says so and falls back to writing
 files, so install one — `uv pip install pyqt6`.
 
+## Seeing every member
+
+The ranking chart lists the 12 worst by default. `--top N` changes that and
+`--top 0` shows **all** of them — 86 for a modest roof, 227 for a multi-span:
+
+```
+./ms --top 0 --out out
+```
+
+The labelling adapts to the room it has rather than to the member count: on a
+tall standalone PNG every name is printed at 7 pt, in the dashboard's small
+panel they thin to every fifth and shrink to 4.5 pt, and if even that would
+collide the axis becomes a position (1 … n) — every bar is still drawn, so the
+distribution reads either way. The title carries the count and how many fail.
+
+To identify a specific member, the 3D panel is the better tool; the ranking is
+for seeing the spread.
+
 ## Speed
 
 One dashboard interaction — move a slider, switch a shape, drag a vertex —

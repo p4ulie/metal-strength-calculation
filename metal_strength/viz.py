@@ -38,6 +38,10 @@ _INTERACTIVE = False
 # process draws in one language. Thread it through if that stops being true.
 LANG = "en"
 
+# How many members the ranking chart lists. 0 means all of them; the CLI's
+# --top sets it, exactly as --lang sets LANG above.
+RANKING_TOP = 12
+
 
 def _L(key: str) -> str:
     return i18n.t(key, LANG)
@@ -188,21 +192,55 @@ def _draw_utilisation_3d(ax, roof: Roof, checks: list[ec3.MemberResult],
         ax.set_title(title, fontsize=10)
 
 
-def _draw_ranking(ax, checks: list[ec3.MemberResult], top: int = 12) -> None:
+def _draw_ranking(ax, checks: list[ec3.MemberResult], top: int | None = None) -> None:
+    """Members ranked by utilisation. ``top=None`` uses RANKING_TOP; 0 means all.
+
+    A whole roof is hundreds of members, so the labelling thins out as the list
+    grows: names go small, then every other one, then none at all -- the shape of
+    the distribution stays readable even when the names cannot be.
+    """
     ax.clear()
-    ranked = sorted(checks, key=lambda c: -c.utilisation)[:top]
+    limit = RANKING_TOP if top is None else top
+    ranked = sorted(checks, key=lambda c: -c.utilisation)
+    if limit:
+        ranked = ranked[:limit]
+    n = len(ranked)
     utils = [c.utilisation for c in ranked]
-    ax.barh(range(len(ranked)), utils,
-            color=[UTIL_CMAP(UTIL_NORM(u)) for u in utils])
-    ax.set_yticks(range(len(ranked)), [_label(c) for c in ranked], fontsize=7)
+    ax.barh(range(n), utils, color=[UTIL_CMAP(UTIL_NORM(u)) for u in utils],
+            height=1.0 if n > 60 else 0.8)
+
+    # Size the names to the space each row actually has, which depends on how
+    # tall the axes is, not just on how many bars there are: the same 86 members
+    # are cramped in a dashboard panel and roomy on a 30-inch PNG.
+    row_pts = 72.0 * ax.get_figure().get_size_inches()[1] * ax.get_position().height
+    row_pts = row_pts / max(n, 1)
+    step = 1
+    while row_pts * step < 5.5 and step < 12:  # thin out until they can be read
+        step += 1
+    if row_pts * step >= 5.5:
+        # Size to the gap between the labels actually shown, not to every row.
+        ax.set_yticks(range(0, n, step),
+                      [_label(c) for c in ranked[::step]],
+                      fontsize=min(7.0, max(4.5, row_pts * step * 0.8)))
+    else:
+        # Past this many, names are unreadable at any size; the axis becomes a
+        # position instead. The 3D panel is where you identify a member anyway.
+        ax.set_yticks([0, n - 1], ["1", str(n)], fontsize=7)
+        ax.set_ylabel(f"{_L('members')}, {_L('worst')} 1", fontsize=8)
     ax.invert_yaxis()
     ax.axvline(1.0, color="#c62828", ls="--", lw=1.5)
     ax.set_xlabel(_L("utilisation"), fontsize=9)
-    ax.set_title(f"{_L('worst_members')} ({len(ranked)})", fontsize=10)
-    ax.tick_params(labelsize=8)
-    for i, (u, c) in enumerate(zip(utils, ranked)):
-        ax.text(u + 0.02, i, f"{u:.2f} {c.governing.name}", va="center", fontsize=6)
+    failing = sum(1 for c in ranked if not c.ok)
+    title = f"{_L('worst_members')} ({n}"
+    title += f", {failing} !!)" if failing else ")"
+    ax.set_title(title, fontsize=10)
+    ax.tick_params(axis="x", labelsize=8)
+    if n <= 30:
+        for i, (u, c) in enumerate(zip(utils, ranked)):
+            ax.text(u + 0.02, i, f"{u:.2f} {c.governing.name}",
+                    va="center", fontsize=6)
     ax.set_xlim(0, max(1.25, max(utils) * 1.35))
+    ax.set_ylim(n - 0.5, -0.5)
     ax.grid(axis="x", alpha=0.3)
 
 
@@ -257,11 +295,15 @@ def utilisation_3d(roof: Roof, checks: list[ec3.MemberResult],
 
 
 def utilisation_bars(checks: list[ec3.MemberResult], path: str | Path,
-                     top: int = 20) -> Path:
-    """The worst members as a ranked bar chart -- what to resize first."""
-    n = min(top, len(checks))
-    fig, ax = plt.subplots(figsize=(9, 0.35 * n + 2))
-    _draw_ranking(ax, checks, top)
+                     top: int | None = None) -> Path:
+    """The worst members as a ranked bar chart -- what to resize first.
+
+    ``top=0`` draws every member, and the figure grows to fit.
+    """
+    limit = RANKING_TOP if top is None else top
+    n = min(limit, len(checks)) if limit else len(checks)
+    fig, ax = plt.subplots(figsize=(9, min(0.35 * n + 2, 60)))
+    _draw_ranking(ax, checks, limit)
     fig.tight_layout()
     p = _out(path)
     fig.savefig(p, dpi=130)

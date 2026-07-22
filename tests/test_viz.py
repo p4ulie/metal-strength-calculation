@@ -415,3 +415,71 @@ def test_report_pdf_leaves_no_figures_open(tmp_path):
     results = con.solve()
     viz.report_pdf(con, results, con.check(results), tmp_path / "r.pdf", sk=2.5)
     assert plt.get_fignums() == []
+
+
+def _ranked_bars(ax):
+    return len(ax.containers[0]) if ax.containers else 0
+
+
+def test_ranking_chart_can_show_every_member(tmp_path):
+    import matplotlib.pyplot as plt
+
+    from metal_strength.model import roof
+
+    con = roof(span=12, length=20, pitch_deg=20, rafter="IPE450",
+               column="HEB240", purlin="SHS140x140x5", snow_kn_m2=3.2)
+    checks = con.check(con.solve())
+    assert len(checks) > 50
+
+    fig, ax = plt.subplots(figsize=(9, 30))
+    try:
+        viz._draw_ranking(ax, checks, top=0)
+        assert _ranked_bars(ax) == len(checks), "top=0 means all of them"
+        assert str(len(checks)) in ax.get_title()
+        # Room to spare, so every name is shown and legibly sized.
+        assert len(ax.get_yticks()) == len(checks)
+        assert ax.get_yticklabels()[0].get_fontsize() >= 4.5
+
+        viz._draw_ranking(ax, checks, top=12)
+        assert _ranked_bars(ax) == 12
+    finally:
+        plt.close(fig)
+
+
+def test_ranking_labels_thin_out_when_the_panel_is_small():
+    """Cramped: fewer names, never overlapping ones."""
+    import matplotlib.pyplot as plt
+
+    from metal_strength.model import roof
+
+    con = roof(span=30, length=25, pitch_deg=15, shape="multispan",
+               rafter="IPE400", column="HEB240", purlin="SHS140x140x5",
+               snow_kn_m2=3.2)
+    checks = con.check(con.solve())
+    assert len(checks) > 200
+
+    fig, ax = plt.subplots(figsize=(7, 3.5))  # a dashboard-sized panel
+    try:
+        viz._draw_ranking(ax, checks, top=0)
+        assert _ranked_bars(ax) == len(checks), "every bar is still drawn"
+        ticks = ax.get_yticks()
+        assert len(ticks) < len(checks) / 3, "names must thin out"
+        if len(ticks) > 2:
+            spacing_pts = (72 * 3.5 * ax.get_position().height
+                           / len(checks) * (ticks[1] - ticks[0]))
+            assert spacing_pts >= 5.0, "labels would collide"
+            assert ax.get_yticklabels()[0].get_fontsize() >= 4.5
+    finally:
+        plt.close(fig)
+
+
+def test_cli_top_reaches_the_charts(monkeypatch, tmp_path):
+    from metal_strength import cli
+
+    before = viz.RANKING_TOP
+    try:
+        cli.main(["roof", "--span", "12", "--length", "20", "--snow", "2.0",
+                  "--top", "0", "--out", str(tmp_path)])
+        assert viz.RANKING_TOP == 0
+    finally:
+        viz.RANKING_TOP = before

@@ -45,6 +45,7 @@ def _report(roof, out: Path | None, prefix: str, show: bool = False,
     rebuild the structure as its sliders move.
     """
     viz.LANG = getattr(roof, "_lang", "en")
+    viz.RANKING_TOP = getattr(roof, "_top", viz.RANKING_TOP)
     backend = viz.interactive() if show else None
     if show and backend is None:
         print("note: no GUI toolkit found, charts will only be written to disk.\n"
@@ -343,6 +344,8 @@ def main(argv: list[str] | None = None) -> int:
                            help="EUR per unit of the price list currency")
         sub_p.add_argument("--waste", type=float, default=0.0,
                            help="off-cut allowance in percent")
+        sub_p.add_argument("--top", type=int, default=12, metavar="N",
+                           help="members listed in the ranking chart; 0 for all")
         sub_p.add_argument("--pdf", type=Path,
                            help="write a report PDF: verdict, charts, snow cases, "
                                 "material list")
@@ -412,7 +415,7 @@ def main(argv: list[str] | None = None) -> int:
               + (f", UDL {a.udl} kN/m" if a.udl else "")
               + (f", point {a.point} kN" if a.point else "")
               + (", laterally restrained" if a.restrained else ""))
-        roof_obj._lang = a.lang
+        roof_obj._lang, roof_obj._top = a.lang, a.top
         _report(roof_obj, a.out, "beam", a.show, pdf=a.pdf,
                 material_list=_bom_text(roof_obj))
         if a.bom or a.cost:
@@ -442,6 +445,7 @@ def main(argv: list[str] | None = None) -> int:
             _materials(proposal.construction, a)
         if a.out or a.show or a.pdf:
             proposal.construction._lang = a.lang
+            proposal.construction._top = a.top
             _report(proposal.construction, a.out, "design", a.show,
                     mcp_port=None if a.no_mcp else a.port, mcp_host=a.host,
                     pdf=a.pdf, material_list=_bom_text(proposal.construction),
@@ -467,7 +471,7 @@ def main(argv: list[str] | None = None) -> int:
         rafter=a.rafter, column=a.column, purlin=a.purlin, grade=a.grade,
         snow_kn_m2=snow_load, snow_case=a.case,
     )
-    roof_obj._lang = a.lang
+    roof_obj._lang, roof_obj._top = a.lang, a.top
     _report(roof_obj, a.out, "roof", a.show,
             mcp_port=None if a.no_mcp else a.port, mcp_host=a.host,
             pdf=a.pdf, material_list=_bom_text(roof_obj), live=dict(
