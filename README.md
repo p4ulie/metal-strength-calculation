@@ -208,8 +208,25 @@ uv run python tests/smoke_mcp.py                  # exercise every tool
 
 Tools: `snow_load_from_depth`, `snow_load_eurocode`, `list_sections`,
 `list_shapes`, `section_properties`, `check_beam`, `check_rod_buckling`,
-`check_roof`, `solve_frame`, `propose_construction`, `material_list`,
-`render_snow_cases`.
+`check_roof`, `tune_roof`, `solve_frame`, `propose_construction`,
+`material_list`, `render_snow_cases`.
+
+### Tuning a roof remotely
+
+`tune_roof` holds a roof between calls, so you state only what changes and get
+the verdict plus the four-panel chart back inline:
+
+```
+tune_roof(shape="multispan", span_m=30)   -> 0.78, 27,867 kg, chart
+tune_roof(rafter="IPE500")                -> 0.78, 28,553 kg, chart
+tune_roof(snow_depth_m=1.5)               -> ...
+tune_roof(reset=True)                     -> back to the defaults
+```
+
+Everything omitted keeps its value, `changed` in the reply says what actually
+moved, and `snow_cases_available` tells you which arrangements the current
+shape allows. Naming a depth after a direct `snow_kn_m2` switches back to the
+depth. One session per process — right for one person driving it, not for two.
 
 `propose_construction` is the design solver; `material_list` returns the BOM
 with an indicative cost and a `price_note` that must be repeated to the user.

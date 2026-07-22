@@ -18,6 +18,8 @@ CALLS: list[tuple[str, dict]] = [
     ("snow_load_eurocode", {"zone": 2, "altitude_m": 400.0, "pitch_deg": 20.0}),
     ("list_sections", {"family": "IPE"}),
     ("list_shapes", {}),
+    ("tune_roof", {"reset": True, "shape": "monopitch", "chart": False}),
+    ("tune_roof", {"rafter": "IPE500", "chart": False}),
     ("section_properties", {"name": "IPE300"}),
     ("check_beam", {"span_m": 6.0, "section": "IPE200", "udl_kn_per_m": 5.0,
                     "restrained": True}),

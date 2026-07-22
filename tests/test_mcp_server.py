@@ -14,8 +14,49 @@ EXPECTED_TOOLS = {
     "snow_load_from_depth", "snow_load_eurocode", "list_sections",
     "section_properties", "check_beam", "check_rod_buckling", "check_roof",
     "solve_frame", "render_snow_cases", "propose_construction", "material_list",
-    "list_shapes",
+    "list_shapes", "tune_roof",
 }
+
+
+def test_tune_roof_keeps_state_between_calls():
+    srv.tune_roof(reset=True, chart=False)
+    first = srv.tune_roof(shape="multispan", span_m=30.0, chart=False)[0]
+    assert first["changed"] == {"span_m": 30.0, "shape": "multispan"}
+    assert first["parameters"]["rafter"] == srv.TUNE_DEFAULTS["rafter"]
+
+    # One nudge: everything else must survive.
+    second = srv.tune_roof(rafter="IPE500", chart=False)[0]
+    assert second["changed"] == {"rafter": "IPE500"}
+    assert second["parameters"]["span_m"] == 30.0
+    assert second["parameters"]["shape"] == "multispan"
+    assert second["snow_cases_available"] == ["balanced", "valley_drift"]
+
+    # Heavier section, same load: utilisation must come down, mass must go up.
+    assert second["worst_utilisation"] < first["worst_utilisation"]
+    assert second["total_mass_kg"] > first["total_mass_kg"]
+
+    back = srv.tune_roof(reset=True, chart=False)[0]
+    assert back["parameters"] == srv.TUNE_DEFAULTS
+
+
+def test_tune_roof_returns_a_chart_and_a_depth_overrides_a_direct_load():
+    srv.tune_roof(reset=True, chart=False)
+    out = srv.tune_roof(snow_kn_m2=4.0, chart=True)
+    state, image = out
+    assert state["snow_kn_m2_applied"] == 4.0
+    assert image.to_image_content().data, "the chart must come back inline"
+
+    # Naming a depth afterwards means the depth is what you now mean.
+    state = srv.tune_roof(snow_depth_m=0.5, chart=False)[0]
+    assert state["parameters"]["snow_kn_m2"] is None
+    assert state["snow_kn_m2_applied"] == pytest.approx(0.8 * 2.0, rel=1e-3)
+
+
+def test_tune_roof_is_json_safe():
+    import json
+
+    state = srv.tune_roof(reset=True, chart=False)[0]
+    json.dumps(state)  # numpy scalars would raise here
 
 
 def test_list_shapes_tool_matches_the_shapes_module():

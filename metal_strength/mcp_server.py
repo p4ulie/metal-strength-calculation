@@ -11,7 +11,8 @@ import tempfile
 from pathlib import Path
 from typing import Literal
 
-from mcp.server.fastmcp import FastMCP
+import matplotlib.pyplot as plt
+from mcp.server.fastmcp import FastMCP, Image
 from pydantic import BaseModel, Field
 
 from . import bom, design, ec3, loads, shapes, viz
@@ -402,6 +403,115 @@ def list_shapes_tool() -> dict:
         "note": ("Hipped, pyramidal and conical roofs are not supported -- they are "
                  "not a constant profile extruded along the length."),
     }
+
+
+# --- a tunable session ------------------------------------------------------
+# One mutable parameter set, so a client can nudge a single value instead of
+# restating the whole roof on every call.
+# ponytail: one session shared by every client of this process. That is right
+# for a tool one person drives; add a session id if it ever serves two at once.
+
+TUNE_DEFAULTS: dict = {
+    "span_m": 12.0, "length_m": 20.0, "pitch_deg": 20.0, "shape": "duopitch",
+    "eaves_height_m": 3.0, "frame_spacing_m": 5.0, "purlin_spacing_m": 1.5,
+    "rafter": "IPE450", "column": "HEB240", "purlin": "SHS140x140x5",
+    "grade": "S235", "snow_depth_m": 1.0, "snow_state": "wet",
+    "snow_kn_m2": None, "case": "balanced",
+}
+_session: dict = dict(TUNE_DEFAULTS)
+
+
+def _session_roof(params: dict):
+    snow = params["snow_kn_m2"]
+    if snow is None:
+        sk = loads.snow_from_depth(params["snow_depth_m"], params["snow_state"])
+        snow = loads.roof_snow_load(sk, params["pitch_deg"])[0].left
+    return build_roof(
+        span=params["span_m"], length=params["length_m"],
+        pitch_deg=params["pitch_deg"], shape=params["shape"],
+        eaves_height=params["eaves_height_m"],
+        frame_spacing=params["frame_spacing_m"],
+        purlin_spacing=params["purlin_spacing_m"],
+        rafter=params["rafter"], column=params["column"], purlin=params["purlin"],
+        grade=params["grade"], snow_kn_m2=snow, snow_case=params["case"],
+    ), snow
+
+
+@mcp.tool(
+    name="tune_roof",
+    description=(
+        "Adjust one or more parameters of a roof that persists between calls, "
+        "re-solve it, and get back the verdict plus a four-panel chart image. "
+        "This is the tool for iterating: 'now try a multispan', 'raise the rafter "
+        "to IPE500', 'what about 1.5 m of wet snow' -- omitted arguments keep "
+        "their current value, so you only state what changes. Pass reset=true to "
+        "go back to the defaults, or no arguments at all to re-read the current "
+        "state. Prefer check_roof for a single one-off check."
+    ),
+)
+def tune_roof(
+    span_m: float | None = None,
+    length_m: float | None = None,
+    pitch_deg: float | None = None,
+    shape: Literal["flat", "monopitch", "duopitch", "mansard", "gambrel",
+                   "sawtooth", "multispan"] | None = None,
+    eaves_height_m: float | None = None,
+    frame_spacing_m: float | None = None,
+    purlin_spacing_m: float | None = None,
+    rafter: str | None = None,
+    column: str | None = None,
+    purlin: str | None = None,
+    grade: Literal["S235", "S275", "S355", "S420", "S460"] | None = None,
+    snow_depth_m: float | None = None,
+    snow_state: Literal["fresh", "settled", "old", "wet"] | None = None,
+    snow_kn_m2: float | None = None,
+    case: Literal["balanced", "drift_left", "drift_right",
+                  "valley_drift"] | None = None,
+    reset: bool = False,
+    chart: bool = True,
+) -> list:
+    global _session
+    if reset:
+        _session = dict(TUNE_DEFAULTS)
+
+    given = {k: v for k, v in locals().items()
+             if k in TUNE_DEFAULTS and v is not None}
+    # A depth given after a direct load means the depth is what you now mean.
+    if ("snow_depth_m" in given or "snow_state" in given) and "snow_kn_m2" not in given:
+        given["snow_kn_m2"] = None
+    changed = {k: v for k, v in given.items() if _session.get(k) != v}
+    _session.update(given)
+
+    roof, snow = _session_roof(_session)
+    results = roof.solve()
+    checks = roof.check(results)
+    defl = roof.deflection(results)
+    worst = max(checks, key=lambda c: c.utilisation)
+
+    state = {
+        "parameters": dict(_session),
+        "changed": changed,
+        "snow_kn_m2_applied": round(float(snow), 3),
+        "ok": all(c.ok for c in checks) and defl.ok,
+        "worst_utilisation": round(float(worst.utilisation), 3),
+        "governing_member": worst.section,
+        "governing_check": worst.governing.name if worst.governing else "none",
+        "deflection_utilisation": round(float(defl.utilisation), 3),
+        "total_mass_kg": round(float(roof.total_mass_kg), 1),
+        "members": len(checks),
+        "mu_approximate": roof.profile.mu_is_approximate if roof.profile else False,
+        "snow_cases_available": list(loads.ARRANGEMENTS[_session["shape"]]),
+        "disclaimer": DISCLAIMER,
+    }
+    if not chart:
+        return [state]
+
+    CHARTS.mkdir(parents=True, exist_ok=True)
+    path = CHARTS / "tune_roof.png"
+    fig = viz.panel(roof, results, checks, title=f"{_session['shape']} roof")
+    fig.savefig(path, dpi=80)  # dpi 80 keeps the inline image around 300 kB
+    plt.close(fig)
+    return [state, Image(path=path)]
 
 
 @mcp.tool(
