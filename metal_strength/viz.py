@@ -1,5 +1,8 @@
-"""Charts. Headless by design -- every function writes a file and returns its path,
-so the MCP server and the CLI can both hand results back without a display.
+"""Charts. Headless by default -- every function writes a file and returns its
+path, so the MCP server and the CLI can hand results back without a display.
+
+Call :func:`interactive` first (the CLI's ``--show`` flag does) to switch to a
+GUI backend and have the figures open in windows as well as being saved.
 """
 
 from __future__ import annotations
@@ -16,6 +19,42 @@ from matplotlib.colors import LinearSegmentedColormap, Normalize  # noqa: E402
 
 from . import ec3, frame3d  # noqa: E402
 from .model import Roof  # noqa: E402
+
+# GUI backends worth trying, best first. Whichever imports wins.
+_GUI_BACKENDS = ("QtAgg", "TkAgg", "GTK4Agg", "GTK3Agg", "WXAgg", "MacOSX")
+_INTERACTIVE = False
+
+
+def interactive(enable: bool = True) -> str | None:
+    """Switch to a GUI backend so charts open in windows. Returns its name.
+
+    Must be called *before* any figure is created -- matplotlib binds the
+    backend at figure-creation time. Returns None if no GUI toolkit is
+    installed, in which case charts are still written to disk as usual.
+    """
+    global _INTERACTIVE
+    if not enable:
+        return None
+    for backend in _GUI_BACKENDS:
+        try:
+            matplotlib.use(backend, force=True)
+        except Exception:  # noqa: BLE001 - missing toolkit, try the next
+            continue
+        _INTERACTIVE = True
+        return backend
+    return None
+
+
+def _finish(fig) -> None:
+    """Close the figure, unless we are keeping it around to display."""
+    if not _INTERACTIVE:
+        plt.close(fig)
+
+
+def show() -> None:
+    """Block on the open chart windows. No-op when running headless."""
+    if _INTERACTIVE:
+        plt.show()
 
 # Green through amber to red: utilisation 0 -> 1 -> beyond.
 UTIL_CMAP = LinearSegmentedColormap.from_list(
@@ -55,7 +94,7 @@ def force_diagrams(results: frame3d.Results, member: int, path: str | Path,
     fig.tight_layout()
     p = _out(path)
     fig.savefig(p, dpi=130)
-    plt.close(fig)
+    _finish(fig)
     return p
 
 
@@ -87,7 +126,7 @@ def deflected_shape(roof: Roof, results: frame3d.Results, path: str | Path,
     fig.tight_layout()
     p = _out(path)
     fig.savefig(p, dpi=130)
-    plt.close(fig)
+    _finish(fig)
     return p
 
 
@@ -125,7 +164,7 @@ def utilisation_3d(roof: Roof, checks: list[ec3.MemberResult], path: str | Path)
     fig.tight_layout()
     p = _out(path)
     fig.savefig(p, dpi=130)
-    plt.close(fig)
+    _finish(fig)
     return p
 
 
@@ -151,7 +190,7 @@ def utilisation_bars(checks: list[ec3.MemberResult], path: str | Path,
     fig.tight_layout()
     p = _out(path)
     fig.savefig(p, dpi=130)
-    plt.close(fig)
+    _finish(fig)
     return p
 
 
@@ -184,5 +223,5 @@ def snow_cases(sk: float, pitch_deg: float, path: str | Path) -> Path:
     fig.tight_layout()
     p = _out(path)
     fig.savefig(p, dpi=130)
-    plt.close(fig)
+    _finish(fig)
     return p

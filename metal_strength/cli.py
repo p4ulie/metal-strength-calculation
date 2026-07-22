@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import argparse
+import sys
+import tempfile
 from pathlib import Path
 
 from . import loads, viz
@@ -10,7 +12,12 @@ from .model import pitched_roof, single_beam
 from .sections import get_section, list_sections
 
 
-def _report(roof, out: Path | None, prefix: str) -> None:
+def _report(roof, out: Path | None, prefix: str, show: bool = False) -> None:
+    backend = viz.interactive() if show else None
+    if show and backend is None:
+        print("note: no GUI toolkit found, charts will only be written to disk.\n"
+              "      install one, e.g.  uv pip install pyqt6", file=sys.stderr)
+
     results = roof.solve()
     checks = roof.check(results)
     ranked = sorted(checks, key=lambda c: -c.utilisation)
@@ -34,17 +41,22 @@ def _report(roof, out: Path | None, prefix: str) -> None:
     print(f"\n=> the structure {verdict} "
           f"(strength {worst.utilisation:.2f}, deflection {defl.utilisation:.2f})")
 
-    if out:
+    if out or show:
+        # Charts are always written; --show additionally opens them in windows.
+        target = out or Path(tempfile.mkdtemp(prefix="metal-strength-"))
         paths = [
-            viz.utilisation_3d(roof, checks, out / f"{prefix}_utilisation.png"),
-            viz.utilisation_bars(checks, out / f"{prefix}_ranking.png"),
-            viz.deflected_shape(roof, results, out / f"{prefix}_deflection.png"),
-            viz.force_diagrams(results, worst_index, out / f"{prefix}_forces.png",
+            viz.utilisation_3d(roof, checks, target / f"{prefix}_utilisation.png"),
+            viz.utilisation_bars(checks, target / f"{prefix}_ranking.png"),
+            viz.deflected_shape(roof, results, target / f"{prefix}_deflection.png"),
+            viz.force_diagrams(results, worst_index, target / f"{prefix}_forces.png",
                                f"Governing member: {worst.section}"),
         ]
         print("\ncharts:")
         for p in paths:
             print(f"  {p}")
+        if backend:
+            print(f"\nopening {len(paths)} windows ({backend}); close them to exit.")
+            viz.show()
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -74,6 +86,8 @@ def main(argv: list[str] | None = None) -> int:
     beam.add_argument("--restrained", action="store_true",
                       help="compression flange held laterally (no LTB)")
     beam.add_argument("--out", type=Path)
+    beam.add_argument("--show", action="store_true",
+                      help="open the charts in windows as well as saving them")
 
     roof = sub.add_parser("roof", help="generate and check a whole 3D pitched roof")
     roof.add_argument("--span", type=float, required=True, help="metres")
@@ -92,6 +106,8 @@ def main(argv: list[str] | None = None) -> int:
     roof.add_argument("--case", default="balanced",
                       choices=["balanced", "drift_left", "drift_right"])
     roof.add_argument("--out", type=Path)
+    roof.add_argument("--show", action="store_true",
+                      help="open the charts in windows as well as saving them")
 
     sect = sub.add_parser("sections", help="catalogue lookup")
     sect.add_argument("name", nargs="?", help="profile name; omit to list a family")
@@ -143,7 +159,7 @@ def main(argv: list[str] | None = None) -> int:
               + (f", UDL {a.udl} kN/m" if a.udl else "")
               + (f", point {a.point} kN" if a.point else "")
               + (", laterally restrained" if a.restrained else ""))
-        _report(roof_obj, a.out, "beam")
+        _report(roof_obj, a.out, "beam", a.show)
         return 0
 
     if a.snow is not None:
@@ -164,7 +180,7 @@ def main(argv: list[str] | None = None) -> int:
         rafter=a.rafter, column=a.column, purlin=a.purlin, grade=a.grade,
         snow_kn_m2=snow_load, snow_case=a.case,
     )
-    _report(roof_obj, a.out, "roof")
+    _report(roof_obj, a.out, "roof", a.show)
     return 0
 
 

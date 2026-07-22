@@ -14,6 +14,13 @@ uv run python -m metal_strength.cli roof --span 12 --length 20 --pitch 20 \
 => the structure PASSES (strength 0.90, deflection 0.51)
 ```
 
+Add `--show` to open the charts in interactive windows (zoom, pan, save) as
+well as writing the PNGs:
+
+```
+uv run python -m metal_strength.cli beam --span 6 --section IPE200 --udl 5 --show
+```
+
 ## What it does
 
 | Layer | Module | Basis |
@@ -23,7 +30,7 @@ uv run python -m metal_strength.cli roof --span 12 --length 20 --pitch 20 \
 | Analysis | `frame3d.py` | 3D direct stiffness, 6 DOF/node, pure numpy |
 | Design checks | `ec3.py` | EN 1993-1-1 §6.2, §6.3 |
 | Geometry | `model.py` | pitched-roof generator, single beams |
-| Output | `viz.py`, `viewer.py` | matplotlib charts, interactive pygame viewer |
+| Output | `viz.py`, `viewer.py` | matplotlib charts (files or windows), pygame viewer |
 | LLM access | `mcp_server.py` | MCP over stdio, 9 tools |
 
 ## How much is a metre of snow?
