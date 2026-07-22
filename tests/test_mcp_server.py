@@ -292,3 +292,81 @@ def test_free_port_falls_back_when_the_preferred_one_is_taken():
         taken.listen(1)
         assert cli._free_port(busy, "127.0.0.1") != busy
     assert cli._free_port(0, "127.0.0.1") > 0
+
+
+def test_tune_roof_draws_a_free_form_profile():
+    """An arch is not a preset: the LLM sends points, and can bend them again."""
+    import math
+
+    srv.tune_roof(reset=True, chart=False)
+    arch = [[x, 3.0 + 2.0 * math.sin(math.pi * x / 12)] for x in range(0, 13, 2)]
+    state = srv.tune_roof(profile_points=arch, chart=False)[0]
+
+    assert state["parameters"]["shape"] == "custom"
+    assert state["mu_approximate"] is True, "no Eurocode rule for an arbitrary outline"
+    assert state["profile_points"][0] == [0.0, 3.0]
+    assert max(z for _, z in state["profile_points"]) == pytest.approx(5.0)
+    assert len(state["slope_pitches_deg"]) == len(arch) - 1
+
+    # "bend it more": read the points back, scale the rise, send them again.
+    bent = [[x, 3.0 + (z - 3.0) * 1.5] for x, z in state["profile_points"]]
+    after = srv.tune_roof(profile_points=bent, chart=False)[0]
+    assert max(z for _, z in after["profile_points"]) == pytest.approx(6.0)
+
+    # Naming a shape again discards the drawing.
+    back = srv.tune_roof(shape="duopitch", chart=False)[0]
+    assert back["parameters"]["points"] is None
+    assert back["parameters"]["shape"] == "duopitch"
+    # A preset reports the outline it generated, so it can be bent in turn.
+    assert len(back["profile_points"]) == 3
+
+
+def test_a_preset_reports_points_that_can_be_sent_straight_back():
+    for shape in ("duopitch", "gambrel", "multispan"):
+        state = srv.tune_roof(reset=True, shape=shape, chart=False)[0]
+        again = srv.tune_roof(profile_points=state["profile_points"],
+                              chart=False)[0]
+        assert again["profile_points"] == state["profile_points"]
+        assert again["worst_utilisation"] == pytest.approx(
+            state["worst_utilisation"], rel=1e-6), shape
+
+
+@pytest.mark.parametrize("bad, reason", [
+    ([[0, 3], [0, 5], [12, 3]], "increase in x"),
+    ([[0, 3], [8, 5], [4, 3]], "increase in x"),
+    ([[0, 3], [12, 0]], "ground"),
+    ([[0, 3]], "at least two"),
+])
+def test_a_drawn_profile_is_refused_with_the_reason(bad, reason):
+    srv.tune_roof(reset=True, chart=False)
+    with pytest.raises(ValueError, match=reason):
+        srv.tune_roof(profile_points=bad, chart=False)
+    assert srv._session["points"] is None, "a refusal must not change the roof"
+
+
+def test_a_drawn_profile_reaches_an_open_window():
+    import matplotlib.pyplot as plt
+
+    from metal_strength import viz
+
+    plt.close("all")
+    srv.tune_roof(reset=True, chart=False)
+    fig = viz.dashboard(session=srv._session)
+
+    class Applier:
+        session = srv._session
+
+        def __call__(self, params):
+            return fig._ms_widgets["apply"](params)
+
+    srv.attach_window(Applier())
+    try:
+        srv.tune_roof(profile_points=[[0, 3], [4, 6], [8, 5], [12, 3]], chart=False)
+        w = fig._ms_widgets
+        assert w["profile"]().shape == "custom"
+        assert w["profile"]().points[1] == (4.0, 6.0)
+        # "custom" has no radio entry; the radio keeps naming the mu source.
+        assert w["shape"].value_selected
+    finally:
+        srv.attach_window(None)
+        plt.close(fig)

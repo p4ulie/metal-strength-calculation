@@ -383,10 +383,12 @@ def check_roof(
 @mcp.tool(
     name="list_shapes",
     description=(
-        "List the roof profile shapes check_roof can build, with the EN 1991-1-3 "
-        "snow arrangements that apply to each and whether its shape coefficients "
-        "are approximate. Call this before check_roof when the roof is not a "
-        "plain duopitch."
+        "List the roof profile shapes check_roof and tune_roof can build, with "
+        "the EN 1991-1-3 snow arrangements that apply to each and whether its "
+        "shape coefficients are approximate. Call this before check_roof when the "
+        "roof is not a plain duopitch. Anything outside this list -- arches, "
+        "asymmetric or stepped outlines -- is drawn point by point instead, with "
+        "tune_roof's profile_points."
     ),
 )
 def list_shapes_tool() -> dict:
@@ -416,7 +418,7 @@ TUNE_DEFAULTS: dict = {
     "eaves_height_m": 3.0, "frame_spacing_m": 5.0, "purlin_spacing_m": 1.5,
     "rafter": "IPE450", "column": "HEB240", "purlin": "SHS140x140x5",
     "grade": "S235", "snow_depth_m": 1.0, "snow_state": "wet",
-    "snow_kn_m2": None, "case": "balanced",
+    "snow_kn_m2": None, "case": "balanced", "points": None,
 }
 _session: dict = dict(TUNE_DEFAULTS)
 
@@ -442,7 +444,9 @@ def _session_roof(params: dict):
         snow = loads.roof_snow_load(sk, params["pitch_deg"])[0].left
     return build_roof(
         span=params["span_m"], length=params["length_m"],
-        pitch_deg=params["pitch_deg"], shape=params["shape"],
+        pitch_deg=params["pitch_deg"],
+        shape="duopitch" if params["points"] else params["shape"],
+        profile=params["points"],
         eaves_height=params["eaves_height_m"],
         frame_spacing=params["frame_spacing_m"],
         purlin_spacing=params["purlin_spacing_m"],
@@ -460,7 +464,30 @@ def _session_roof(params: dict):
         "to IPE500', 'what about 1.5 m of wet snow' -- omitted arguments keep "
         "their current value, so you only state what changes. Pass reset=true to "
         "go back to the defaults, or no arguments at all to re-read the current "
-        "state. Prefer check_roof for a single one-off check."
+        "state. Prefer check_roof for a single one-off check.\n"
+        "\n"
+        "SHAPE. `shape` picks one of the seven presets (see list_shapes); the "
+        "snow arrangements follow it, and `snow_cases_available` in the reply "
+        "says which ones the current shape allows.\n"
+        "\n"
+        "FREE-FORM PROFILES. `profile_points` is the frame's outline as "
+        "[[x, z], ...] in metres, left eaves to right eaves, z measured from the "
+        "ground -- everything between the two is yours to shape, and columns are "
+        "added under the ends and under every valley automatically. Use it to "
+        "build what the presets cannot: an arch (sample a circle or a sine), an "
+        "asymmetric roof, a raised ridge, a butterfly, a stepped clerestory.\n"
+        "Every reply returns `profile_points` for the shape in force, presets "
+        "included, so a follow-up like 'bend that arch more' or 'raise the ridge "
+        "half a metre' is: read the points back, modify them, send them again. "
+        "`slope_pitches_deg` reports what each segment ended up at.\n"
+        "Rules, enforced with a reason rather than a silent failure: x must "
+        "strictly increase (no vertical segments and no doubling back), every "
+        "point must sit above the ground, and at least two points are needed. "
+        "About 8-16 points is plenty for a smooth curve.\n"
+        "A hand-drawn profile is `shape=\"custom\"` and its mu is approximated "
+        "from each slope's own pitch, so `mu_approximate` comes back true -- the "
+        "Eurocode has no rule for an arbitrary outline. Naming a `shape` again "
+        "discards the polyline and returns to that preset."
     ),
 )
 def tune_roof(
@@ -481,6 +508,7 @@ def tune_roof(
     snow_kn_m2: float | None = None,
     case: Literal["balanced", "drift_left", "drift_right",
                   "valley_drift"] | None = None,
+    profile_points: list[list[float]] | None = None,
     reset: bool = False,
     chart: bool = True,
 ) -> list:
@@ -490,6 +518,13 @@ def tune_roof(
 
     given = {k: v for k, v in locals().items()
              if k in TUNE_DEFAULTS and v is not None}
+    if profile_points is not None:
+        pts = [(float(x), float(z)) for x, z in profile_points]
+        shapes.validate(pts)  # refuse it here, with the reason, not at the solver
+        given["points"] = pts
+        given["shape"] = "custom"
+    elif shape is not None:
+        given["points"] = None  # a named shape replaces whatever was drawn
     # A depth given after a direct load means the depth is what you now mean.
     if ("snow_depth_m" in given or "snow_state" in given) and "snow_kn_m2" not in given:
         given["snow_kn_m2"] = None
@@ -520,6 +555,12 @@ def tune_roof(
         "total_mass_kg": round(float(roof.total_mass_kg), 1),
         "members": len(checks),
         "mu_approximate": roof.profile.mu_is_approximate if roof.profile else False,
+        # The polyline actually in force, so the next call can bend *this* one
+        # rather than guessing at it. Presets report the points they generated.
+        "profile_points": [[round(x, 3), round(z, 3)] for x, z in roof.profile.points]
+                          if roof.profile else [],
+        "slope_pitches_deg": [round(p, 1) for p in roof.profile.pitches()]
+                             if roof.profile else [],
         "snow_cases_available": list(loads.ARRANGEMENTS[_session["shape"]]),
         "disclaimer": DISCLAIMER,
     }

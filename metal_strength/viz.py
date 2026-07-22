@@ -665,8 +665,11 @@ def dashboard(
         """
         echoing["flag"] = True
         try:
-            for key, value in params.items():
-                if key not in SESSION_KEYS or value is None and key != "points":
+            # points last: a shape change clears them, and an explicit polyline
+            # must win over that.
+            ordered = sorted(params.items(), key=lambda kv: kv[0] == "points")
+            for key, value in ordered:
+                if key not in SESSION_KEYS or (value is None and key != "points"):
                     continue
                 S[key] = value
                 if key == "snow_depth_m":
@@ -674,8 +677,11 @@ def dashboard(
                 elif key == "snow_state":
                     r_state.set_active(states.index(value))
                 elif key == "shape":
-                    r_shape.set_active(list(shapes.SHAPES).index(value))
-                    S["points"] = None
+                    if value in shapes.SHAPES:
+                        r_shape.set_active(list(shapes.SHAPES).index(value))
+                        S["points"] = None
+                    # "custom" has no radio entry: the radio keeps naming the
+                    # preset whose mu a hand-drawn profile borrows.
                 elif key in ("rafter", "column", "purlin"):
                     set_section(key, value)
             if "snow_kn_m2" in params and params["snow_kn_m2"] is not None:

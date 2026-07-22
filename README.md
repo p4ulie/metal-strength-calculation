@@ -282,6 +282,26 @@ moved, and `snow_cases_available` tells you which arrangements the current
 shape allows. Naming a depth after a direct `snow_kn_m2` switches back to the
 depth. One session per process — right for one person driving it, not for two.
 
+### Shapes in words
+
+`shape=` covers the seven presets. Anything else — an arch, an asymmetric roof,
+a stepped clerestory — is drawn point by point with `profile_points`, the frame
+outline as `[[x, z], ...]` in metres from the left eaves to the right, columns
+added under the ends and every valley automatically:
+
+```
+tune_roof(profile_points=[[0,3],[2,4.0],[4,4.7],[6,5.0],[8,4.7],[10,4.0],[12,3]])
+  -> shape "custom", mu_approximate true
+```
+
+Every reply returns `profile_points` for the shape in force — **presets
+included** — plus `slope_pitches_deg`. That is what makes an instruction like
+"bend that arch more" or "raise the ridge half a metre" work: read the outline
+back, modify it, send it again. Naming a `shape` discards the drawing.
+
+Refusals carry the reason (x must strictly increase, nothing below ground) and
+leave the previous roof standing.
+
 `propose_construction` is the design solver; `material_list` returns the BOM
 with an indicative cost and a `price_note` that must be repeated to the user.
 

@@ -20,6 +20,8 @@ CALLS: list[tuple[str, dict]] = [
     ("list_shapes", {}),
     ("tune_roof", {"reset": True, "shape": "monopitch", "chart": False}),
     ("tune_roof", {"rafter": "IPE500", "chart": False}),
+    ("tune_roof", {"profile_points": [[0, 3], [3, 5.5], [6, 6.2], [9, 5.5], [12, 3]],
+                   "chart": False}),
     ("section_properties", {"name": "IPE300"}),
     ("check_beam", {"span_m": 6.0, "section": "IPE200", "udl_kn_per_m": 5.0,
                     "restrained": True}),
