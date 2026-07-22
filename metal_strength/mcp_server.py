@@ -420,16 +420,19 @@ TUNE_DEFAULTS: dict = {
 }
 _session: dict = dict(TUNE_DEFAULTS)
 
-# When a live window is open in this process it registers a sink here, and every
-# tune_roof call posts its solved roof to it. The sink must be thread-safe --
-# tune_roof runs on the server's thread, the window redraws on the main one.
-_live_sink = None
+# When a window is open in this process it registers an applier here. tune_roof
+# then sets the parameters *through the window*, so the sliders move and there
+# is one set of values rather than two. The applier is called from the server's
+# thread and is responsible for getting the work onto the GUI thread.
+_apply_through_window = None
 
 
-def set_live_sink(sink) -> None:
-    """Route solved roofs to a live window. ``None`` detaches it."""
-    global _live_sink
-    _live_sink = sink
+def attach_window(applier) -> None:
+    """Route tune_roof through an open window. ``None`` detaches it."""
+    global _apply_through_window, _session
+    _apply_through_window = applier
+    if applier is not None:
+        _session = applier.session
 
 
 def _session_roof(params: dict):
@@ -493,9 +496,15 @@ def tune_roof(
     changed = {k: v for k, v in given.items() if _session.get(k) != v}
     _session.update(given)
 
-    roof, snow = _session_roof(_session)
-    results = roof.solve()
-    checks = roof.check(results)
+    if _apply_through_window is not None:
+        # The window owns the widgets; it applies the change, re-solves and
+        # hands the result back. _session is the same dict it reads.
+        roof, results, checks = _apply_through_window(given)
+        snow = roof.snow_kn_m2
+    else:
+        roof, snow = _session_roof(_session)
+        results = roof.solve()
+        checks = roof.check(results)
     defl = roof.deflection(results)
     worst = max(checks, key=lambda c: c.utilisation)
 
@@ -514,9 +523,7 @@ def tune_roof(
         "snow_cases_available": list(loads.ARRANGEMENTS[_session["shape"]]),
         "disclaimer": DISCLAIMER,
     }
-    if _live_sink is not None:
-        _live_sink((roof, results, checks, f"{_session['shape']} roof"))
-        state["live_window"] = True
+    state["window"] = _apply_through_window is not None
 
     if not chart:
         return [state]

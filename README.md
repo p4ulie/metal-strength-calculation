@@ -203,7 +203,7 @@ OK   shear z (web)           0.39  137/348 kN   [6.2.6]
 ```
 uv run python -m metal_strength.cli serve                      # stdio
 uv run python -m metal_strength.cli serve --http --port 8000   # http://127.0.0.1:8000/mcp
-uv run python -m metal_strength.cli serve --http --live        # ... and a window it drives
+uv run python -m metal_strength.cli serve --http --show        # ... and the dashboard beside it
 uv run python -m metal_strength.mcp_server                     # same thing, for MCP client configs
 uv run python tests/smoke_mcp.py                  # exercise every tool
 ```
@@ -216,19 +216,22 @@ Tools: `snow_load_from_depth`, `snow_load_eurocode`, `list_sections`,
 ### One process, not two
 
 `serve` runs the MCP server inside the CLI, so there is a single application:
-`metal-strength`. Adding `--live` opens a window in that same process which
-redraws on every `tune_roof` call — matplotlib owns the main thread because its
-GUI must, the server runs beside it on a daemon thread, and solved roofs cross
-between them through a queue drained on a timer. Nothing touches a figure off
-the main thread.
+`metal-strength`. Adding `--show` opens the dashboard in that same process, and
+the sliders and `tune_roof` drive **the same roof** — a tool call moves the
+handles, and moving a handle is what the next tool call reports.
 
-Two processes cannot do this. A separate `./roof --show` and a separate server
-hold two unrelated roofs in two memories, and no tool call will ever move that
-window.
+That works because there is one parameter dict, not two kept in step: the
+window reads and writes the MCP server's session directly, so no redraw can
+read a stale value off an untouched widget and silently revert a tool's change.
+Values with no widget (span, length, eaves height) are session-only; the window
+just shows the result.
 
-The live window has no sliders, on purpose: `--show` means you own the
-parameters, `--live` means the MCP session does, and two owners of one roof is
-how they drift apart.
+It has to be one process. matplotlib's GUI can only be touched from the thread
+running its event loop, so the main thread keeps the window, the server runs
+beside it on a daemon thread, and a tool call posts its change through a queue
+and waits for the main thread to apply it. Two processes cannot do this at all:
+a separate `./roof --show` and a separate server hold two unrelated roofs in two
+memories, and no tool call will ever move that window.
 
 ### Tuning a roof remotely
 

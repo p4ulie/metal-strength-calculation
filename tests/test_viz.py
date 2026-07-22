@@ -355,3 +355,21 @@ def test_frames_are_drawn_as_collections_not_one_artist_per_member():
         assert len(ax3d.collections) == 1
     finally:
         plt.close(fig)
+
+
+def test_dashboard_keeps_the_snow_case_the_cli_asked_for():
+    import matplotlib.pyplot as plt
+
+    plt.close("all")
+    fig = viz.dashboard(span=12.0, length=20.0, pitch_deg=20.0,
+                        snow_case="drift_left", shape="duopitch")
+    try:
+        session = fig._ms_widgets["session"]
+        assert session["case"] == "drift_left"
+        # A shape with no ridge cannot have a ridge drift: fall back, do not fail.
+        fig._ms_widgets["shape"].set_active(list(
+            __import__("metal_strength.shapes", fromlist=["SHAPES"]).SHAPES
+        ).index("multispan"))
+        assert session["case"] == "balanced"
+    finally:
+        plt.close(fig)

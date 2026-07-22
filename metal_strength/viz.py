@@ -362,31 +362,6 @@ def panel(roof: Roof, results: frame3d.Results, checks: list[ec3.MemberResult],
     return fig
 
 
-def live_window(title: str = ""):
-    """An empty four-panel window for something else to drive. Returns (fig, axes).
-
-    The dashboard's sliders and this are alternatives, deliberately: sliders mean
-    the human owns the parameters, a live window means the MCP session does, and
-    two owners of one roof is how they drift apart.
-    """
-    fig = plt.figure(figsize=(15, 9))
-    axes = _layout(fig, controls=False)
-    fig.colorbar(plt.cm.ScalarMappable(cmap=UTIL_CMAP, norm=UTIL_NORM),
-                 ax=axes[0], shrink=0.6, pad=0.12, label=_L("utilisation"))
-    fig.suptitle(title or _L("waiting"), fontsize=12)
-    return fig, axes
-
-
-def repaint(fig, axes, roof: Roof, results: frame3d.Results,
-            checks: list[ec3.MemberResult], title: str = "") -> None:
-    """Redraw a live window with a freshly solved roof."""
-    worst = _paint(axes, roof, results, checks)
-    defl = roof.deflection(results)
-    head = _headline(roof, checks, defl, worst)
-    fig.suptitle(f"{title}\n{head}" if title else head, fontsize=12)
-    fig.canvas.draw_idle()
-
-
 # --- the live dashboard -----------------------------------------------------
 
 
@@ -402,6 +377,15 @@ def _ladder(name: str) -> tuple[list[str], int]:
     return names, names.index(canonical) if canonical in names else 0
 
 
+# The parameter set a dashboard reads and writes. The MCP session uses exactly
+# these keys, so when a window is served the two are the same dict -- not two
+# stores kept in step.
+SESSION_KEYS = ("span_m", "length_m", "pitch_deg", "shape", "eaves_height_m",
+                "frame_spacing_m", "purlin_spacing_m", "rafter", "column",
+                "purlin", "grade", "snow_depth_m", "snow_state", "snow_kn_m2",
+                "case", "points")
+
+
 def dashboard(
     span: float = 12.0,
     length: float = 20.0,
@@ -413,6 +397,7 @@ def dashboard(
     snow_depth: float = 1.0,
     snow_state: str = "wet",
     shape: str = "duopitch",
+    session: dict | None = None,
     **roof_kwargs,
 ):
     """One window with live controls: scrub the snow, step the sections, re-solve.
@@ -425,6 +410,11 @@ def dashboard(
     deflected-shape panel over to a vertex editor, and dragging a corner rebuilds
     the frame as a custom shape.
 
+    ``session`` is the parameter dict, mutated in place. Every widget writes into
+    it and every redraw reads out of it, so passing the MCP server's session here
+    means a tool call and a slider are moving the same values -- the returned
+    ``apply`` callable sets them from outside and moves the handles to match.
+
     Every distinct combination is solved once and cached, so going back to a
     setting you have already tried is instant.
     """
@@ -433,17 +423,29 @@ def dashboard(
     from . import loads, shapes
     from .model import roof as build_roof
 
+    S = session if session is not None else {}
+    case = roof_kwargs.pop("snow_case", "balanced")
+    for key, value in (
+        ("span_m", span), ("length_m", length), ("pitch_deg", pitch_deg),
+        ("shape", shape), ("rafter", rafter), ("column", column),
+        ("purlin", purlin), ("grade", grade), ("snow_depth_m", snow_depth),
+        ("snow_state", snow_state), ("snow_kn_m2", None), ("case", case),
+        ("eaves_height_m", roof_kwargs.pop("eaves_height", 3.0)),
+        ("frame_spacing_m", roof_kwargs.pop("frame_spacing", 5.0)),
+        ("purlin_spacing_m", roof_kwargs.pop("purlin_spacing", 1.5)),
+        ("points", None),
+    ):
+        S.setdefault(key, value)
+
     states = list(loads.SNOW_DENSITY)
-    eaves_height = roof_kwargs.get("eaves_height", 3.0)
-    # The profile in play: a preset until the editor produces a custom one.
-    current = {"shape": shape, "points": None}
 
     def profile() -> "shapes.Frame":
-        if current["points"] is not None:
-            return shapes.from_points(current["points"])
-        return shapes.frame(current["shape"], span, pitch_deg, eaves_height)
-    ladders = {k: _ladder(v) for k, v in
-               (("rafter", rafter), ("column", column), ("purlin", purlin))}
+        if S["points"] is not None:
+            return shapes.from_points(S["points"])
+        return shapes.frame(S["shape"], S["span_m"], S["pitch_deg"],
+                            S["eaves_height_m"])
+
+    ladders = {role: _ladder(S[role]) for role in ("rafter", "column", "purlin")}
 
     fig = plt.figure(figsize=(15, 9.5))
     axes = _layout(fig, controls=True)
@@ -452,27 +454,41 @@ def dashboard(
 
     cache: dict[tuple, tuple] = {}
 
-    def solve(depth: float, state: str, sections: dict[str, str]):
+    def solve():
+        """Solve whatever the session currently says. Cached on the parameters."""
         fr = profile()
-        key = (round(depth, 2), state, *sections.values(), fr.shape, fr.points)
+        key = (fr.shape, fr.points, S["case"], S["grade"],
+               round(S["snow_depth_m"], 3), S["snow_state"], S["snow_kn_m2"],
+               S["rafter"], S["column"], S["purlin"],
+               S["span_m"], S["length_m"], S["frame_spacing_m"],
+               S["purlin_spacing_m"])
         if key not in cache:
-            sk = loads.snow_from_depth(key[0], state)
-            # The reference load at the profile's nominal pitch; each slope's
-            # own mu is applied inside the model.
-            snow = loads.mu1(fr.pitch_deg) * sk
-            roof = build_roof(span=span, length=length, pitch_deg=pitch_deg,
-                              profile=fr,
-                              rafter=sections["rafter"], column=sections["column"],
-                              purlin=sections["purlin"], grade=grade,
-                              snow_kn_m2=snow, **roof_kwargs)
+            snow = S["snow_kn_m2"]
+            if snow is None:
+                # The reference load at the profile's nominal pitch; each slope's
+                # own mu is applied inside the model.
+                snow = loads.mu1(fr.pitch_deg) * loads.snow_from_depth(
+                    S["snow_depth_m"], S["snow_state"])
+            case = S["case"]
+            if case not in loads.ARRANGEMENTS.get(fr.shape, ()):
+                case = "balanced"  # the shape changed under it
+                S["case"] = case
+            roof = build_roof(span=S["span_m"], length=S["length_m"],
+                              pitch_deg=S["pitch_deg"], profile=fr,
+                              rafter=S["rafter"], column=S["column"],
+                              purlin=S["purlin"], grade=S["grade"],
+                              snow_kn_m2=snow, snow_case=case,
+                              frame_spacing=S["frame_spacing_m"],
+                              purlin_spacing=S["purlin_spacing_m"],
+                              eaves_height=S["eaves_height_m"], **roof_kwargs)
             results = roof.solve()
             cache[key] = (roof, results, roof.check(results))
         return cache[key]
 
     # -- controls -------------------------------------------------------------
     ax_depth = fig.add_axes([0.13, 0.115, 0.28, 0.025])
-    s_depth = Slider(ax_depth, _L("snow_depth"), 0.0, 3.0, valinit=snow_depth,
-                     valstep=0.05, color="#90caf9")
+    s_depth = Slider(ax_depth, _L("snow_depth"), 0.0, 3.0,
+                     valinit=S["snow_depth_m"], valstep=0.05, color="#90caf9")
 
     ax_state = fig.add_axes([0.46, 0.02, 0.10, 0.13])
     ax_state.set_title(_L("snow_state"), fontsize=9)
@@ -480,13 +496,13 @@ def dashboard(
     # load model expects.
     state_labels = {i18n.snow_term(st, LANG): st for st in states}
     r_state = RadioButtons(ax_state, list(state_labels),
-                           active=states.index(snow_state))
+                           active=states.index(S["snow_state"]))
 
     ax_shape = fig.add_axes([0.005, 0.01, 0.11, 0.16])
     ax_shape.set_title(_L("shape"), fontsize=9)
     shape_labels = {i18n.shape_term(sh, LANG): sh for sh in shapes.SHAPES}
     r_shape = RadioButtons(ax_shape, list(shape_labels),
-                           active=list(shapes.SHAPES).index(shape))
+                           active=list(shapes.SHAPES).index(S["shape"]))
     for label in r_shape.labels:
         label.set_fontsize(8)
 
@@ -497,18 +513,13 @@ def dashboard(
     for i, role in enumerate(("rafter", "column", "purlin")):
         names, idx = ladders[role]
         ax = fig.add_axes([0.66, 0.115 - i * 0.042, 0.28, 0.022])
-        sliders[role] = Slider(ax, i18n.role(role, LANG), 0, len(names) - 1, valinit=idx,
-                               valstep=1, color="#a5d6a7")
+        sliders[role] = Slider(ax, i18n.role(role, LANG), 0, len(names) - 1,
+                               valinit=idx, valstep=1, color="#a5d6a7")
         sliders[role].valtext.set_text(names[idx])
 
-    def current_sections() -> dict[str, str]:
-        out = {}
-        for role, slider in sliders.items():
-            names, _ = ladders[role]
-            name = names[int(slider.val)]
-            slider.valtext.set_text(name)
-            out[role] = name
-        return out
+    # While a value is being echoed into a widget, that widget's own callback
+    # must not write it back -- set_val and set_active both fire them.
+    echoing = {"flag": False}
 
     # -- the profile editor ---------------------------------------------------
     # ponytail: the editor borrows the deflected-shape panel rather than adding
@@ -530,7 +541,8 @@ def dashboard(
                          color="#c62828")
             fig.canvas.draw_idle()
             return
-        current["points"] = pts
+        S["points"] = pts
+        S["shape"] = "custom"
         draw_editor()
         redraw(keep_editor=True)
 
@@ -543,7 +555,7 @@ def dashboard(
         for seg in fr.segments:
             if seg.role == "column":
                 ax.plot([seg.x0, seg.x1], [seg.z0, seg.z1], color="#90a4ae", lw=1.5)
-        ax.set_xlim(-1.0, span + 1.0)
+        ax.set_xlim(-1.0, S["span_m"] + 1.0)
         ax.set_ylim(0.0, fr.apex_height * 1.35)
         ax.set_aspect("equal")
         ax.set_title(f"{_L('edit_profile')} -- {i18n.shape_term(fr.shape, LANG)}",
@@ -554,26 +566,56 @@ def dashboard(
         sel.verts = [(pts[0][0], 0.0), *pts, (pts[-1][0], 0.0)]
         editor["selector"] = sel
 
-    def redraw(_=None, keep_editor: bool = False) -> None:
-        sections = current_sections()
-        state = state_labels[r_state.value_selected]
-        roof, results, checks = solve(s_depth.val, state, sections)
+    def redraw(_=None, keep_editor: bool = False):
+        roof, results, checks = solve()
         worst = _paint(axes, roof, results, checks)
         if keep_editor or editing():
             draw_editor()
         defl = roof.deflection(results)
-        warning = f"   |   {_L('mu_approximate')}" if profile().mu_is_approximate else ""
+        fr = profile()
+        warning = f"   |   {_L('mu_approximate')}" if fr.mu_is_approximate else ""
+        snow_note = (f"{S['snow_kn_m2']:.2f} kN/m$^2$" if S["snow_kn_m2"] is not None
+                     else f"{S['snow_depth_m']:.2f} m, "
+                          f"{i18n.snow_term(S['snow_state'], LANG)}")
         fig.suptitle(
-            f"{i18n.shape_term(profile().shape, LANG)} {span:.0f} x {length:.0f} "
-            f"{_L('roof_at')} {pitch_deg:.0f}deg, {grade}"
-            f"   |   {_L('snow')} {s_depth.val:.2f} m, {r_state.value_selected}\n"
+            f"{i18n.shape_term(fr.shape, LANG)} {S['span_m']:.0f} x "
+            f"{S['length_m']:.0f} {_L('roof_at')} {S['pitch_deg']:.0f}deg, "
+            f"{S['grade']}   |   {_L('snow')} {snow_note}\n"
             f"{_headline(roof, checks, defl, worst)}{warning}", fontsize=11)
         fig.canvas.draw_idle()
+        return roof, results, checks
+
+    # -- widgets write into the session, never the other way round ------------
+    def on_depth(val) -> None:
+        if echoing["flag"]:
+            return
+        S["snow_depth_m"] = float(val)
+        S["snow_kn_m2"] = None  # a depth means the depth is what you now mean
+        deferred()
+
+    def on_state(label) -> None:
+        if echoing["flag"]:
+            return
+        S["snow_state"] = state_labels[label]
+        S["snow_kn_m2"] = None
+        redraw()
 
     def on_shape(label) -> None:
-        current["shape"] = shape_labels[label]
-        current["points"] = None  # a preset replaces whatever was drawn
+        if echoing["flag"]:
+            return
+        S["shape"] = shape_labels[label]
+        S["points"] = None  # a preset replaces whatever was drawn
         redraw()
+
+    def on_section(_=None) -> None:
+        for role, slider in sliders.items():
+            names, _idx = ladders[role]
+            name = names[int(slider.val)]
+            slider.valtext.set_text(name)
+            if not echoing["flag"]:
+                S[role] = name
+        if not echoing["flag"]:
+            deferred()
 
     def on_edit_toggled(_label) -> None:
         if not editing():
@@ -586,9 +628,7 @@ def dashboard(
     all_sliders = [s_depth, *sliders.values()]
     dirty = {"flag": False}
 
-    def on_change(_=None) -> None:
-        for role, slider in sliders.items():
-            slider.valtext.set_text(ladders[role][0][int(slider.val)])
+    def deferred() -> None:
         if any(s.drag_active for s in all_sliders):
             dirty["flag"] = True
             fig.canvas.draw_idle()
@@ -600,9 +640,54 @@ def dashboard(
             dirty["flag"] = False
             redraw()
 
-    for slider in all_sliders:
-        slider.on_changed(on_change)
-    r_state.on_clicked(lambda _: redraw())
+    def set_section(role: str, name: str) -> None:
+        """Move a section slider, rebuilding its ladder if the family changed."""
+        from .sections import get_section
+
+        names, idx = ladders[role]
+        canonical = get_section(name).name
+        if canonical not in names:
+            names, idx = _ladder(canonical)
+            ladders[role] = (names, idx)
+            slider = sliders[role]
+            slider.valmax = len(names) - 1
+            slider.ax.set_xlim(slider.valmin, slider.valmax)
+        else:
+            idx = names.index(canonical)
+        sliders[role].set_val(idx)
+        sliders[role].valtext.set_text(names[idx])
+
+    def apply(params: dict):
+        """Set parameters from outside and move the handles to match.
+
+        Returns the solved (roof, results, checks). Must be called on the thread
+        running the GUI event loop -- everything here touches widgets.
+        """
+        echoing["flag"] = True
+        try:
+            for key, value in params.items():
+                if key not in SESSION_KEYS or value is None and key != "points":
+                    continue
+                S[key] = value
+                if key == "snow_depth_m":
+                    s_depth.set_val(value)
+                elif key == "snow_state":
+                    r_state.set_active(states.index(value))
+                elif key == "shape":
+                    r_shape.set_active(list(shapes.SHAPES).index(value))
+                    S["points"] = None
+                elif key in ("rafter", "column", "purlin"):
+                    set_section(key, value)
+            if "snow_kn_m2" in params and params["snow_kn_m2"] is not None:
+                S["snow_kn_m2"] = params["snow_kn_m2"]
+        finally:
+            echoing["flag"] = False
+        return redraw()
+
+    s_depth.on_changed(on_depth)
+    for role in sliders:
+        sliders[role].on_changed(on_section)
+    r_state.on_clicked(on_state)
     r_shape.on_clicked(on_shape)
     c_edit.on_clicked(on_edit_toggled)
     fig.canvas.mpl_connect("button_release_event", on_release)
@@ -610,6 +695,6 @@ def dashboard(
     # Keep references alive; matplotlib drops widgets that are only local.
     fig._ms_widgets = {"depth": s_depth, "state": r_state, "shape": r_shape,
                        "edit": c_edit, "sections": sliders, "editor": editor,
-                       "profile": profile}
+                       "profile": profile, "session": S, "apply": apply}
     redraw()
     return fig

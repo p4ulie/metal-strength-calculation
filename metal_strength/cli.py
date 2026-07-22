@@ -104,7 +104,7 @@ def _report(roof, out: Path | None, prefix: str, show: bool = False,
 
 
 def _serve(a) -> int:
-    """MCP and, with --live, a window it drives -- one process, one roof.
+    """MCP and, with --show, the dashboard beside it -- one process, one roof.
 
     matplotlib owns the main thread because its GUI must; the server runs beside
     it on a daemon thread and hands solved roofs over through a queue, which the
@@ -112,7 +112,7 @@ def _serve(a) -> int:
     """
     from . import mcp_server as srv
 
-    if not a.live:
+    if not a.show:
         if not a.http:
             srv.mcp.run()
             return 0
@@ -126,26 +126,44 @@ def _serve(a) -> int:
 
     backend = viz.interactive()
     if backend is None:
-        print("no GUI toolkit found, so there is no window to drive: "
-              "install one (uv pip install pyqt6) or drop --live.", file=sys.stderr)
+        print("no GUI toolkit found, so there is no window to open: "
+              "install one (uv pip install pyqt6) or drop --show.", file=sys.stderr)
         return 1
 
+    # The window owns the parameters; the server borrows them. A tool call posts
+    # the change here and waits for the main thread to apply it, because every
+    # widget it touches belongs to the GUI thread.
+    fig = viz.dashboard(session=srv._session, **_dashboard_kwargs(srv._session))
+    apply_on_gui = fig._ms_widgets["apply"]
     pending: queue.Queue = queue.Queue()
-    srv.set_live_sink(pending.put)
-    fig, axes = viz.live_window()
+
+    class _Applier:
+        session = srv._session
+
+        def __call__(self, params: dict):
+            reply: queue.Queue = queue.Queue(maxsize=1)
+            pending.put((params, reply))
+            try:
+                ok, payload = reply.get(timeout=30)
+            except queue.Empty:
+                raise TimeoutError("the window did not respond; is it still open?")
+            if not ok:
+                raise payload
+            return payload
 
     def pump() -> None:
-        latest = None
-        while True:  # a burst of calls only needs its last frame drawn
+        while True:
             try:
-                latest = pending.get_nowait()
+                params, reply = pending.get_nowait()
             except queue.Empty:
-                break
-        if latest is not None:
-            roof, results, checks, title = latest
-            viz.repaint(fig, axes, roof, results, checks, title)
+                return
+            try:
+                reply.put((True, apply_on_gui(params)))
+            except Exception as exc:  # noqa: BLE001 - hand it to the caller
+                reply.put((False, exc))
 
-    timer = fig.canvas.new_timer(200)
+    srv.attach_window(_Applier())
+    timer = fig.canvas.new_timer(150)
     timer.add_callback(pump)
     timer.start()
 
@@ -157,10 +175,24 @@ def _serve(a) -> int:
         target = srv.mcp.run
         where = "stdio"
     threading.Thread(target=target, daemon=True).start()
-    print(f"metal-strength MCP on {where}; window open ({backend}). "
-          f"Every tune_roof call redraws it. Close the window to stop.", flush=True)
+    print(f"metal-strength MCP on {where}; dashboard open ({backend}). "
+          f"Sliders and tune_roof drive the same roof. Close the window to stop.",
+          flush=True)
     viz.show()
     return 0
+
+
+def _dashboard_kwargs(session: dict) -> dict:
+    """The dashboard's own argument names, from a session dict."""
+    return dict(span=session["span_m"], length=session["length_m"],
+                pitch_deg=session["pitch_deg"], shape=session["shape"],
+                rafter=session["rafter"], column=session["column"],
+                purlin=session["purlin"], grade=session["grade"],
+                snow_depth=session["snow_depth_m"],
+                snow_state=session["snow_state"],
+                eaves_height=session["eaves_height_m"],
+                frame_spacing=session["frame_spacing_m"],
+                purlin_spacing=session["purlin_spacing_m"])
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -267,8 +299,9 @@ def main(argv: list[str] | None = None) -> int:
                        help="serve over HTTP at http://HOST:PORT/mcp instead of stdio")
     serve.add_argument("--host", default="127.0.0.1")
     serve.add_argument("--port", type=int, default=8000)
-    serve.add_argument("--live", action="store_true",
-                       help="open a window that redraws on every tune_roof call")
+    serve.add_argument("--show", action="store_true",
+                       help="open the dashboard too; its sliders and the MCP "
+                            "session drive the same roof")
 
     sect = sub.add_parser("sections", help="catalogue lookup")
     sect.add_argument("name", nargs="?", help="profile name; omit to list a family")

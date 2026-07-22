@@ -206,38 +206,48 @@ def test_render_snow_cases(tmp_path, monkeypatch):
     assert Path(p).exists()
 
 
-def test_tune_roof_feeds_a_live_window():
-    """The window is redrawn from what the tool solved -- no second solve."""
+def test_a_window_and_tune_roof_share_one_set_of_parameters():
+    """The bug this design exists to prevent: a tool change silently reverted."""
     import matplotlib.pyplot as plt
 
     from metal_strength import viz
 
-    seen = []
-    srv.set_live_sink(seen.append)
-    try:
-        state = srv.tune_roof(reset=True, shape="multispan", span_m=30.0,
-                              chart=False)[0]
-        assert state["live_window"] is True
-        assert len(seen) == 1
-
-        roof, results, checks, title = seen[-1]
-        assert roof.profile.shape == "multispan"
-        assert round(float(max(c.utilisation for c in checks)), 3) == \
-            state["worst_utilisation"]
-
-        # What the pump does on the main thread must actually paint.
-        fig, axes = viz.live_window()
-        try:
-            viz.repaint(fig, axes, roof, results, checks, title)
-            assert fig._suptitle.get_text()
-        finally:
-            plt.close(fig)
-    finally:
-        srv.set_live_sink(None)
-
-    # Detached again: no more traffic.
+    plt.close("all")
     srv.tune_roof(reset=True, chart=False)
-    assert len(seen) == 1
+    fig = viz.dashboard(session=srv._session, span=12.0, length=15.0)
+    apply_on_gui = fig._ms_widgets["apply"]
+
+    class Applier:
+        session = srv._session
+
+        def __call__(self, params):
+            return apply_on_gui(params)
+
+    srv.attach_window(Applier())
+    try:
+        w = fig._ms_widgets
+        assert w["session"] is srv._session, "one dict, not two"
+
+        # A tool call must move the handles, not just the numbers.
+        state = srv.tune_roof(snow_depth_m=2.0, rafter="HEB300", chart=False)[0]
+        assert state["window"] is True
+        assert w["depth"].val == pytest.approx(2.0)
+        ladder, _ = w["sections"]["rafter"].valtext.get_text(), None
+        assert ladder == "HEB300", "the slider rebuilt onto the HEB ladder"
+
+        # Now move an unrelated slider by hand. The tool's snow depth must
+        # survive it -- this is exactly what two stores got wrong.
+        w["sections"]["column"].set_val(w["sections"]["column"].val + 1)
+        assert srv._session["snow_depth_m"] == pytest.approx(2.0)
+        assert srv._session["rafter"] == "HEB300"
+
+        # And the hand-moved column is what the next tool call reports.
+        after = srv.tune_roof(chart=False)[0]
+        assert after["parameters"]["column"] == srv._session["column"]
+        assert after["parameters"]["snow_depth_m"] == pytest.approx(2.0)
+    finally:
+        srv.attach_window(None)
+        plt.close(fig)
 
 
 def test_serve_is_a_cli_subcommand():
@@ -250,6 +260,6 @@ def test_serve_is_a_cli_subcommand():
     try:
         assert cli.main(["serve", "--http", "--port", "9999"]) == 0
         assert called["args"].http and called["args"].port == 9999
-        assert not called["args"].live
+        assert not called["args"].show
     finally:
         cli._serve = original
