@@ -605,3 +605,82 @@ def test_charts_that_travel_alone_are_stamped():
         assert any(marker in t.get_text() for t in fig.texts)
     finally:
         plt.close(fig)
+
+
+def _key(fig, ax, key, x, y):
+    """Send a key press as if the pointer were at (x, y) in data coordinates."""
+    from matplotlib.backend_bases import KeyEvent
+
+    px, py = ax.transData.transform((x, y))
+    KeyEvent("key_press_event", fig.canvas, key, px, py)._process()
+
+
+def test_editor_adds_and_removes_points():
+    """PolygonSelector moves and removes vertices; adding one is ours."""
+    import matplotlib.pyplot as plt
+
+    plt.close("all")
+    fig = viz.dashboard(span=12.0, length=20.0, pitch_deg=20.0, shape="duopitch")
+    try:
+        w = fig._ms_widgets
+        w["edit"].set_active(0)
+        editor_ax = fig.axes[2]  # the deflected-shape panel, now the editor
+        before = len(w["profile"]().points)
+        assert before == 3  # duopitch: eaves, apex, eaves
+
+        _key(fig, editor_ax, "a", 3.0, 5.0)
+        points = w["profile"]().points
+        assert len(points) == before + 1
+        # A pixel round-trip costs a few ulps, so compare with tolerance.
+        added = [pt for pt in points if pt[0] == pytest.approx(3.0)]
+        assert added and added[0][1] == pytest.approx(5.0)
+        assert w["profile"]().shape == "custom"
+
+        _key(fig, editor_ax, "d", 3.0, 5.0)
+        assert len(w["profile"]().points) == before
+        assert not [pt for pt in w["profile"]().points
+                    if pt[0] == pytest.approx(3.0)]
+    finally:
+        plt.close(fig)
+
+
+def test_editor_snaps_an_added_point_and_keeps_the_eaves():
+    import matplotlib.pyplot as plt
+
+    plt.close("all")
+    fig = viz.dashboard(span=12.0, length=20.0, pitch_deg=20.0, shape="duopitch")
+    try:
+        w = fig._ms_widgets
+        w["edit"].set_active(0)
+        editor_ax = fig.axes[2]
+
+        _key(fig, editor_ax, "a", 2.2, 4.0)  # 2.2 snaps up to the 0.25 m grid
+        assert pytest.approx(2.25) in [x for x, _ in w["profile"]().points]
+
+        # The eaves are what the columns stand on: refuse to drop them.
+        points = w["profile"]().points
+        _key(fig, editor_ax, "d", points[0][0], points[0][1])
+        assert w["profile"]().points[0] == points[0]
+
+        # Two points is a roof; one is not.
+        while len(w["profile"]().points) > 2:
+            interior = w["profile"]().points[1]
+            _key(fig, editor_ax, "d", interior[0], interior[1])
+        _key(fig, editor_ax, "d", w["profile"]().points[0][0], 3.0)
+        assert len(w["profile"]().points) == 2
+    finally:
+        plt.close(fig)
+
+
+def test_editor_keys_do_nothing_outside_edit_mode():
+    import matplotlib.pyplot as plt
+
+    plt.close("all")
+    fig = viz.dashboard(span=12.0, length=20.0, pitch_deg=20.0, shape="duopitch")
+    try:
+        w = fig._ms_widgets
+        before = w["profile"]().points
+        _key(fig, fig.axes[2], "a", 3.0, 5.0)
+        assert w["profile"]().points == before, "not editing: keys are inert"
+    finally:
+        plt.close(fig)

@@ -162,11 +162,27 @@ roof and has no equivalent on a plain duopitch.*
 
 ## Drawing your own profile
 
-In the live dashboard (`--show`), tick **edit profile** and drag the corners:
-the frame rebuilds as a `custom` shape and re-solves on release. Vertices snap
-to 0.25 m, and a profile that cannot be a roof — doubling back, two corners on
-the same vertical, anything on the ground — is refused with the reason, leaving
-the previous one in place.
+In the live dashboard (`--show`), tick **edit profile** and work on the outline
+directly. The frame rebuilds as a `custom` shape and re-solves after each edit:
+
+| | |
+|---|---|
+| drag a corner | move it (snaps to 0.25 m) |
+| right-click a corner | remove it |
+| **A** | add a corner where the pointer is |
+| **D** | drop the corner nearest the pointer |
+
+Dragging and right-click come from matplotlib's polygon selector; adding a
+corner does not exist there, so `A` is ours — a key rather than a click,
+because the selector already owns the mouse inside that panel and a
+double-click would start a drag first.
+
+The eaves points cannot be removed: the columns stand on them. A profile that
+cannot be a roof — doubling back, two corners on the same vertical, anything on
+the ground — is refused with the reason, leaving the previous one in place.
+
+Over MCP the same edits are just a list: send `profile_points` with a point
+added or removed.
 
 Which snow arrangement applies is still your call: the shape radio stays live
 and nominates the standard shape mu comes from, and the answer is stamped

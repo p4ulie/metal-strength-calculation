@@ -153,6 +153,16 @@ MESSAGES: dict[str, dict[str, str]] = {
                      "cs": "upravit tvar"},
     "invalid_profile": {"en": "profile refused", "sk": "neplatný tvar",
                         "cs": "neplatný tvar"},
+    "editor_keys": {
+        "en": "drag to move, right-click to remove, A to add a point, D to drop one",
+        "sk": "ťahaním posuniete, pravým tlačidlom odstránite, A pridá bod, D odoberie",
+        "cs": "tažením posunete, pravým tlačítkem odstraníte, A přidá bod, D odebere",
+    },
+    "keep_the_eaves": {
+        "en": "the eaves points cannot be removed -- drag them instead",
+        "sk": "body v odkvape sa nedajú odstrániť - posuňte ich",
+        "cs": "body v okapu nelze odstranit - posuňte je",
+    },
     "snow_arrangements": {"en": "EN 1991-1-3 snow arrangements",
                           "sk": "Zaťaženie snehom podľa EN 1991-1-3",
                           "cs": "Zatížení sněhem podle EN 1991-1-3"},

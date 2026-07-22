@@ -721,20 +721,46 @@ def dashboard(
         return bool(c_edit.get_status()[0])
 
     def on_edit(verts) -> None:
-        """A vertex moved: rebuild the profile, or refuse if it is not a roof."""
+        """A vertex moved or was right-clicked away: rebuild from what is left."""
         pts = sorted(((round(x / SNAP) * SNAP, z) for x, z in verts
                       if z > 1e-6), key=lambda pt: pt[0])
+        edit_points(pts)
+
+    def edit_points(new_points, why: str = "") -> None:
+        """Accept an edited outline, or refuse it and keep the old one."""
         try:
-            shapes.validate(pts)
+            shapes.validate(new_points)
         except ValueError as exc:
             fig.suptitle(_wrap(fig, f"{_L('invalid_profile')}: {exc}", 11),
                          fontsize=11, color="#c62828")
             fig.canvas.draw_idle()
             return
-        S["points"] = pts
+        S["points"] = new_points
         S["shape"] = "custom"
         draw_editor()
         redraw(keep_editor=True)
+
+    def on_key(event) -> None:
+        """Add or drop a vertex: PolygonSelector can only move and remove them.
+
+        Keys rather than clicks, because the selector already owns the mouse
+        inside its axes and a double-click there starts a drag first.
+        """
+        if not editing() or event.inaxes is not axes[1] or event.xdata is None:
+            return
+        pts = list(profile().points)
+        if event.key in ("a", "insert"):
+            x = round(event.xdata / SNAP) * SNAP
+            edit_points(sorted([*pts, (x, float(event.ydata))],
+                               key=lambda pt: pt[0]))
+        elif event.key in ("d", "delete") and len(pts) > 2:
+            nearest = min(pts, key=lambda pt: abs(pt[0] - event.xdata))
+            if nearest in (pts[0], pts[-1]):
+                fig.suptitle(_wrap(fig, _L("keep_the_eaves"), 11), fontsize=11,
+                             color="#c62828")
+                fig.canvas.draw_idle()
+                return
+            edit_points([pt for pt in pts if pt != nearest])
 
     def draw_editor() -> None:
         ax = axes[1]
@@ -748,8 +774,8 @@ def dashboard(
         ax.set_xlim(-1.0, S["span_m"] + 1.0)
         ax.set_ylim(0.0, fr.apex_height * 1.35)
         ax.set_aspect("equal")
-        ax.set_title(f"{_L('edit_profile')} -- {i18n.shape_term(fr.shape, LANG)}",
-                     fontsize=10)
+        ax.set_title(f"{_L('edit_profile')} -- {i18n.shape_term(fr.shape, LANG)}"
+                     f"   |   {_L('editor_keys')}", fontsize=8)
         ax.grid(alpha=0.3)
         sel = PolygonSelector(ax, on_edit, useblit=False,
                               props=dict(color="#1565c0", lw=1.5))
@@ -888,10 +914,12 @@ def dashboard(
     r_shape.on_clicked(on_shape)
     c_edit.on_clicked(on_edit_toggled)
     fig.canvas.mpl_connect("button_release_event", on_release)
+    fig.canvas.mpl_connect("key_press_event", on_key)
 
     # Keep references alive; matplotlib drops widgets that are only local.
     fig._ms_widgets = {"depth": s_depth, "state": r_state, "shape": r_shape,
                        "edit": c_edit, "sections": sliders, "editor": editor,
-                       "profile": profile, "session": S, "apply": apply}
+                       "profile": profile, "session": S, "apply": apply,
+                       "on_key": on_key}
     redraw()
     return fig
