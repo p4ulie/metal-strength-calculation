@@ -6,7 +6,8 @@
 #   ./ms --shape sawtooth        same, different profile
 #   ./ms --out out --no-show     PNGs instead of a window
 #   ./ms design --cost           let it pick the sections and price them
-#   ./ms serve --http --show     MCP on :8000, driving that same window
+#   ./ms --port 8100             the window always serves MCP; this moves it
+#   ./ms serve                   stdio MCP, no window, for an MCP client
 #   ./ms snow --depth 1.0        subcommands with no defaults pass straight through
 set -euo pipefail
 cd "$(dirname "$0")"

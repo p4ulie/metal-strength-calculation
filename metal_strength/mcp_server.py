@@ -766,11 +766,9 @@ def main() -> None:
     Kept because MCP clients are configured with a module path and stdio; the
     server itself lives in the one CLI now.
     """
-    import sys
-
     from .cli import main as cli_main
 
-    raise SystemExit(cli_main(["serve", *sys.argv[1:]]))
+    raise SystemExit(cli_main(["serve"]))
 
 
 if __name__ == "__main__":

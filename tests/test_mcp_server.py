@@ -250,16 +250,45 @@ def test_a_window_and_tune_roof_share_one_set_of_parameters():
         plt.close(fig)
 
 
-def test_serve_is_a_cli_subcommand():
+def test_serve_is_stdio_only_and_the_window_serves_itself():
+    """No --http to remember: a window serves, and serve is the stdio case."""
     from metal_strength import cli
 
-    # Parsing must reach _serve without running a server.
     called = {}
     original = cli._serve
     cli._serve = lambda a: called.setdefault("args", a) and 0 or 0
     try:
-        assert cli.main(["serve", "--http", "--port", "9999"]) == 0
-        assert called["args"].http and called["args"].port == 9999
-        assert not called["args"].show
+        assert cli.main(["serve"]) == 0
+        assert called["args"].cmd == "serve"
+        assert not hasattr(called["args"], "http")
     finally:
         cli._serve = original
+
+
+def test_a_window_run_carries_its_own_mcp_knobs():
+    from metal_strength import cli
+
+    seen = {}
+    original = cli._report
+    cli._report = lambda *a, **k: seen.update(k)
+    try:
+        cli.main(["roof", "--span", "12", "--length", "20", "--snow", "2.0"])
+        assert seen["mcp_port"] == 8000, "serving is the default, not opt-in"
+        cli.main(["roof", "--span", "12", "--length", "20", "--snow", "2.0",
+                  "--no-mcp"])
+        assert seen["mcp_port"] is None
+    finally:
+        cli._report = original
+
+
+def test_free_port_falls_back_when_the_preferred_one_is_taken():
+    import socket
+
+    from metal_strength import cli
+
+    with socket.socket() as taken:
+        taken.bind(("127.0.0.1", 0))
+        busy = taken.getsockname()[1]
+        taken.listen(1)
+        assert cli._free_port(busy, "127.0.0.1") != busy
+    assert cli._free_port(0, "127.0.0.1") > 0

@@ -36,7 +36,8 @@ def _snow_for(a, parser) -> float:
 
 
 def _report(roof, out: Path | None, prefix: str, show: bool = False,
-            live: dict | None = None) -> None:
+            live: dict | None = None, mcp_port: int | None = 8000,
+            mcp_host: str = "127.0.0.1") -> None:
     """Print the verdict; optionally write PNGs and open one interactive window.
 
     ``live``, when given, is the set of roof parameters the dashboard needs to
@@ -94,51 +95,57 @@ def _report(roof, out: Path | None, prefix: str, show: bool = False,
         # One window with all four panels. For a roof it also gets live
         # sliders; drag the 3D panel to orbit it.
         if live:
-            viz.dashboard(**live)
+            from . import mcp_server as srv
+
+            # One session: the window's widgets and the MCP tools move the same
+            # values. The server is not opt-in -- if there is a window to drive,
+            # it is worth being able to drive it.
+            srv._session.update(_session_from_live(live))
+            fig = viz.dashboard(session=srv._session, **live)
             print(f"\ndashboard open ({backend}). Drag the sliders to re-solve, "
                   "drag the 3D panel to orbit. Close the window to exit.")
+            if mcp_port is not None:
+                url = _serve_dashboard(fig, mcp_host, mcp_port)
+                print(f"MCP on {url} -- tune_roof drives this window.")
         else:
             viz.panel(roof, results, checks, title=prefix)
             print(f"\nchart window open ({backend}); close it to exit.")
         viz.show()
 
 
-def _serve(a) -> int:
-    """MCP and, with --show, the dashboard beside it -- one process, one roof.
+def _free_port(preferred: int, host: str) -> int:
+    """``preferred`` if it is free, otherwise whatever the OS hands out.
 
-    matplotlib owns the main thread because its GUI must; the server runs beside
-    it on a daemon thread and hands solved roofs over through a queue, which the
-    window drains on a timer. Nothing touches a figure off the main thread.
+    ponytail: the socket closes before uvicorn binds, so a racing process could
+    still take it. Serving one person on a loopback address, that is fine.
     """
-    from . import mcp_server as srv
+    import socket
 
-    if not a.show:
-        if not a.http:
-            srv.mcp.run()
-            return 0
-        srv.mcp.settings.host, srv.mcp.settings.port = a.host, a.port
-        print(f"metal-strength MCP on http://{a.host}:{a.port}/mcp", flush=True)
-        srv.mcp.run(transport="streamable-http")
-        return 0
+    with socket.socket() as sock:
+        try:
+            sock.bind((host, preferred))
+        except OSError:
+            sock.bind((host, 0))
+        return sock.getsockname()[1]
 
+
+def _serve_dashboard(fig, host: str, port: int) -> str:
+    """Run MCP beside an open dashboard, both driving its session. Returns the URL.
+
+    matplotlib owns the main thread because its GUI must, so a tool call posts
+    its change to a queue and waits; a canvas timer applies it on the main
+    thread and replies. Nothing touches a widget off the GUI thread.
+    """
     import queue
     import threading
 
-    backend = viz.interactive()
-    if backend is None:
-        print("no GUI toolkit found, so there is no window to open: "
-              "install one (uv pip install pyqt6) or drop --show.", file=sys.stderr)
-        return 1
+    from . import mcp_server as srv
 
-    # The window owns the parameters; the server borrows them. A tool call posts
-    # the change here and waits for the main thread to apply it, because every
-    # widget it touches belongs to the GUI thread.
-    fig = viz.dashboard(session=srv._session, **_dashboard_kwargs(srv._session))
     apply_on_gui = fig._ms_widgets["apply"]
     pending: queue.Queue = queue.Queue()
 
     class _Applier:
-        session = srv._session
+        session = fig._ms_widgets["session"]
 
         def __call__(self, params: dict):
             reply: queue.Queue = queue.Queue(maxsize=1)
@@ -166,33 +173,37 @@ def _serve(a) -> int:
     timer = fig.canvas.new_timer(150)
     timer.add_callback(pump)
     timer.start()
+    fig._ms_timer = timer  # a dropped timer stops firing
 
-    if a.http:
-        srv.mcp.settings.host, srv.mcp.settings.port = a.host, a.port
-        target = lambda: srv.mcp.run(transport="streamable-http")  # noqa: E731
-        where = f"http://{a.host}:{a.port}/mcp"
-    else:
-        target = srv.mcp.run
-        where = "stdio"
-    threading.Thread(target=target, daemon=True).start()
-    print(f"metal-strength MCP on {where}; dashboard open ({backend}). "
-          f"Sliders and tune_roof drive the same roof. Close the window to stop.",
-          flush=True)
-    viz.show()
+    port = _free_port(port, host)
+    srv.mcp.settings.host, srv.mcp.settings.port = host, port
+    threading.Thread(target=lambda: srv.mcp.run(transport="streamable-http"),
+                     daemon=True).start()
+    return f"http://{host}:{port}/mcp"
+
+
+def _serve(a) -> int:
+    """Headless MCP over stdio, which is how an MCP client launches this."""
+    from . import mcp_server as srv
+
+    srv.mcp.run()
     return 0
 
 
-def _dashboard_kwargs(session: dict) -> dict:
-    """The dashboard's own argument names, from a session dict."""
-    return dict(span=session["span_m"], length=session["length_m"],
-                pitch_deg=session["pitch_deg"], shape=session["shape"],
-                rafter=session["rafter"], column=session["column"],
-                purlin=session["purlin"], grade=session["grade"],
-                snow_depth=session["snow_depth_m"],
-                snow_state=session["snow_state"],
-                eaves_height=session["eaves_height_m"],
-                frame_spacing=session["frame_spacing_m"],
-                purlin_spacing=session["purlin_spacing_m"])
+# The dashboard's argument names and the MCP session's differ (one is a CLI,
+# the other a tool schema). One map, in one place.
+_LIVE_TO_SESSION = {
+    "span": "span_m", "length": "length_m", "pitch_deg": "pitch_deg",
+    "eaves_height": "eaves_height_m", "frame_spacing": "frame_spacing_m",
+    "purlin_spacing": "purlin_spacing_m", "rafter": "rafter", "column": "column",
+    "purlin": "purlin", "grade": "grade", "snow_depth": "snow_depth_m",
+    "snow_state": "snow_state", "snow_case": "case", "shape": "shape",
+}
+
+
+def _session_from_live(live: dict) -> dict:
+    """What the command line asked for, in the session's key names."""
+    return {_LIVE_TO_SESSION[k]: v for k, v in live.items() if k in _LIVE_TO_SESSION}
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -278,6 +289,14 @@ def main(argv: list[str] | None = None) -> int:
     design.add_argument("--show", action="store_true",
                         help="open the proposal in the interactive dashboard")
 
+    for sub_p in (roof, design):
+        sub_p.add_argument("--port", type=int, default=8000,
+                           help="MCP port for the dashboard; taken automatically "
+                                "when --show opens a window, next free port if busy")
+        sub_p.add_argument("--host", default="127.0.0.1")
+        sub_p.add_argument("--no-mcp", action="store_true",
+                           help="open the window without serving it")
+
     for sub_p in (beam, roof, design):
         sub_p.add_argument("--lang", default="en", choices=list(i18n.LANGUAGES),
                            help="language for the material list and verdict")
@@ -293,15 +312,8 @@ def main(argv: list[str] | None = None) -> int:
         sub_p.add_argument("--waste", type=float, default=0.0,
                            help="off-cut allowance in percent")
 
-    serve = sub.add_parser(
-        "serve", help="run the MCP server in this process (optionally with a window)")
-    serve.add_argument("--http", action="store_true",
-                       help="serve over HTTP at http://HOST:PORT/mcp instead of stdio")
-    serve.add_argument("--host", default="127.0.0.1")
-    serve.add_argument("--port", type=int, default=8000)
-    serve.add_argument("--show", action="store_true",
-                       help="open the dashboard too; its sliders and the MCP "
-                            "session drive the same roof")
+    sub.add_parser("serve", help="MCP over stdio, no window -- for an MCP client "
+                                 "that launches this process itself")
 
     sect = sub.add_parser("sections", help="catalogue lookup")
     sect.add_argument("name", nargs="?", help="profile name; omit to list a family")
@@ -385,7 +397,9 @@ def main(argv: list[str] | None = None) -> int:
             _materials(proposal.construction, a)
         if a.out or a.show:
             proposal.construction._lang = a.lang
-            _report(proposal.construction, a.out, "design", a.show, live=dict(
+            _report(proposal.construction, a.out, "design", a.show,
+                    mcp_port=None if a.no_mcp else a.port, mcp_host=a.host,
+                    live=dict(
                 span=a.span, length=a.length, pitch_deg=a.pitch,
                 eaves_height=a.eaves_height, frame_spacing=a.frame_spacing,
                 purlin_spacing=a.purlin_spacing, grade=a.grade,
@@ -408,7 +422,8 @@ def main(argv: list[str] | None = None) -> int:
         snow_kn_m2=snow_load, snow_case=a.case,
     )
     roof_obj._lang = a.lang
-    _report(roof_obj, a.out, "roof", a.show, live=dict(
+    _report(roof_obj, a.out, "roof", a.show,
+            mcp_port=None if a.no_mcp else a.port, mcp_host=a.host, live=dict(
         span=a.span, length=a.length, pitch_deg=a.pitch, eaves_height=a.eaves_height,
         frame_spacing=a.frame_spacing, purlin_spacing=a.purlin_spacing,
         rafter=a.rafter, column=a.column, purlin=a.purlin, grade=a.grade,

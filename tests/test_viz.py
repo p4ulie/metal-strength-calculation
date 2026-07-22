@@ -129,14 +129,17 @@ def test_cli_show_opens_one_window_for_a_beam(monkeypatch, tmp_path):
 
 
 def test_cli_show_opens_the_dashboard_for_a_roof(monkeypatch):
-    """A roof is parametric, so --show gets the live dashboard."""
+    """A roof is parametric, so --show gets the dashboard -- and serves it."""
     from metal_strength import cli
 
     opened = {}
     monkeypatch.setattr(viz, "interactive", lambda *a, **k: "FakeAgg")
     monkeypatch.setattr(viz, "show", lambda: None)
     monkeypatch.setattr(viz, "panel", lambda *a, **k: opened.setdefault("panel", True))
-    monkeypatch.setattr(viz, "dashboard", lambda **k: opened.update(dash=k))
+    monkeypatch.setattr(viz, "dashboard", lambda **k: opened.update(dash=k) or "fig")
+    monkeypatch.setattr(cli, "_serve_dashboard",
+                        lambda fig, host, port: opened.update(served=(fig, port))
+                        or f"http://{host}:{port}/mcp")
 
     rc = cli.main(["roof", "--span", "12", "--length", "20", "--pitch", "20",
                    "--snow-depth", "1.0", "--snow-state", "wet",
@@ -148,6 +151,7 @@ def test_cli_show_opens_the_dashboard_for_a_roof(monkeypatch):
     assert opened["dash"]["rafter"] == "IPE450"
     assert opened["dash"]["snow_depth"] == 1.0
     assert opened["dash"]["snow_state"] == "wet"
+    assert opened["served"][1] == 8000, "a window serves MCP without being asked"
 
 
 def test_cli_without_show_does_not_open_windows(monkeypatch, tmp_path):

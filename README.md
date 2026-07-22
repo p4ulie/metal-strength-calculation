@@ -205,10 +205,9 @@ OK   shear z (web)           0.39  137/348 kN   [6.2.6]
 ## MCP server
 
 ```
-uv run python -m metal_strength.cli serve                      # stdio
-uv run python -m metal_strength.cli serve --http --port 8000   # http://127.0.0.1:8000/mcp
-uv run python -m metal_strength.cli serve --http --show        # ... and the dashboard beside it
-uv run python -m metal_strength.mcp_server                     # same thing, for MCP client configs
+uv run python -m metal_strength.cli roof --span 12 --length 20 --show   # window + MCP on :8000
+uv run python -m metal_strength.cli serve                               # stdio, no window
+uv run python -m metal_strength.mcp_server                              # same, for MCP client configs
 uv run python tests/smoke_mcp.py                  # exercise every tool
 ```
 
@@ -219,10 +218,15 @@ Tools: `snow_load_from_depth`, `snow_load_eurocode`, `list_sections`,
 
 ### One process, not two
 
-`serve` runs the MCP server inside the CLI, so there is a single application:
-`metal-strength`. Adding `--show` opens the dashboard in that same process, and
-the sliders and `tune_roof` drive **the same roof** — a tool call moves the
-handles, and moving a handle is what the next tool call reports.
+There is one application, `metal-strength`, and **any window it opens serves
+MCP**. `--show` starts the dashboard and the HTTP server together on port 8000
+(next free port if that one is busy — the URL is printed), so the sliders and
+`tune_roof` drive **the same roof**: a tool call moves the handles, and moving a
+handle is what the next tool call reports. `--port` moves it, `--no-mcp` opens
+the window without serving it.
+
+`serve` is the other case only: stdio, no window, for an MCP client that
+launches this process itself.
 
 That works because there is one parameter dict, not two kept in step: the
 window reads and writes the MCP server's session directly, so no redraw can
