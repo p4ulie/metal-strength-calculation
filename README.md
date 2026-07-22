@@ -187,6 +187,30 @@ Between **1.0 and 4.0 kN/m²** — a 4× spread — depending on its state
 uv run python -m metal_strength.cli snow --depth 1.0 --state wet --pitch 20
 ```
 
+## Why bigger rafters can turn the columns green
+
+Counter-intuitive, and correct. In a pinned-base portal frame the column's
+moment comes from the frame's horizontal thrust, `M = H · h`, and the thrust
+falls as the rafter gets stiffer — the frame spreads less, so it pushes the
+column tops outward less. Kleinlogel's closed form for a rectangular portal
+under a UDL says the same thing without any help from this solver:
+
+```
+H = w L² / (4 h (2k + 3)),   k = (I_rafter / L) / (I_column / h)
+```
+
+Bigger `I_rafter` → bigger `k` → smaller `H`. Swapping IPE300 for IPE600 on a
+12 m frame takes the eaves moment from 142 to 98 kNm, so the column utilisation
+drops even though the roof got heavier.
+
+The weight does arrive, though: over that same swap the column's axial load
+rises 106 → 115 kN. To see weight alone, change the **purlins** — they add mass
+without stiffening the portal, and column utilisation then rises monotonically
+(0.59 → 0.66 across SHS100 to SHS250).
+
+Both are pinned by tests: the thrust against the closed form to 0.2%, and the
+purlin case as a monotonic check.
+
 ## Checks performed
 
 Cross-section classification (1–4) · tension · compression · shear with

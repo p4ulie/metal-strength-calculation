@@ -236,3 +236,81 @@ def test_sloping_member_gravity_load():
     assert r.reactions[0, 2] == pytest.approx(w * Ln, rel=REL)
     # And the member sees a real axial force from the slope.
     assert abs(r.peak(0)["N"]) == pytest.approx(w * Ln * math.sin(pitch), rel=1e-2)
+
+
+def test_portal_thrust_matches_the_closed_form():
+    """Pinned-base portal under a UDL, against Kleinlogel.
+
+        H = w L^2 / (4 h (2k + 3)),  k = (I_b/L)/(I_c/h),  M_eaves = H h
+
+    This is the check behind a result that reads wrong at first: a *stiffer*
+    rafter lowers the column moment, because the frame spreads less and pushes
+    the column tops out less. The formula says so independently of our solver.
+    """
+    from metal_strength import ec3
+    from metal_strength.sections import get_section
+
+    L, h, w, n = 12.0, 4.0, 20.0, 12  # metres, kN/m
+    column = get_section("HEB240")
+
+    def portal(beam_name):
+        beam = get_section(beam_name)
+        xs = [L * 1000 * i / n for i in range(n + 1)]
+        nodes = ([Node(0, 0, 0)]
+                 + [Node(x, 0, h * 1000) for x in xs]
+                 + [Node(L * 1000, 0, 0)])
+
+        def member(i, j, s):
+            return Member(i, j, ec3.E, ec3.G, s.A, s.Iy, s.Iz, s.It)
+
+        members = ([member(0, 1, column)]
+                   + [member(i, i + 1, beam) for i in range(1, n + 1)]
+                   + [member(n + 2, n + 1, column)])
+        pinned = (True,) * 3 + (True, False, False)
+        loads = [MemberLoad(e, globalz=-w) for e in range(1, n + 1)]
+        st = Structure(nodes, members, {0: pinned, n + 2: pinned}, {}, loads)
+        r = solve(st)
+        return (abs(r.reactions[0][0]) / 1e3,      # thrust, kN
+                abs(r.peak(0)["My"]) / 1e6,        # eaves moment, kNm
+                abs(r.peak(0)["N"]) / 1e3)         # column axial, kN
+
+    previous_moment = None
+    # In order of Iy, which is not the order of the names: HEB300 is less stiff
+    # about y than IPE500.
+    beams = sorted(("IPE300", "IPE500", "HEB300", "HEB600"),
+                   key=lambda name: get_section(name).Iy)
+    for beam_name in beams:
+        k = ((get_section(beam_name).Iy / (L * 1000))
+             / (column.Iy / (h * 1000)))
+        exact = w * L ** 2 / (4 * h * (2 * k + 3))
+
+        thrust, moment, axial = portal(beam_name)
+        assert thrust == pytest.approx(exact, rel=2e-3)
+        assert moment == pytest.approx(exact * h, rel=2e-3)
+        # Statics: each column carries half the load whatever the beam is.
+        assert axial == pytest.approx(w * L / 2, rel=1e-3)
+
+        if previous_moment is not None:
+            assert moment < previous_moment, "a stiffer beam must thrust less"
+        previous_moment = moment
+
+
+def test_heavier_purlins_load_the_columns_harder():
+    """Weight with no stiffening effect must push column utilisation up.
+
+    The rafter case is confounded -- a bigger rafter both weighs more and
+    stiffens the frame. Purlins span between frames, so they only add weight.
+    """
+    from metal_strength.model import roof
+
+    def worst_column(purlin):
+        con = roof(span=12, length=20, pitch_deg=20, rafter="IPE400",
+                   column="HEB240", purlin=purlin, snow_kn_m2=1.92)
+        checks = con.check(con.solve())
+        return max(c.utilisation for c in checks
+                   if c.section.split("] ")[1].startswith("column"))
+
+    utilisations = [worst_column(p) for p in
+                    ("SHS100x100x4", "SHS140x140x5", "SHS200x200x8", "SHS250x250x10")]
+    assert utilisations == sorted(utilisations), utilisations
+    assert utilisations[-1] > utilisations[0] * 1.05
