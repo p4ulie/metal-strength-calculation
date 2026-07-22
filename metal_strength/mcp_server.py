@@ -7,12 +7,14 @@ pydantic models so results arrive structured rather than as prose.
 
 from __future__ import annotations
 
+import base64
 import tempfile
 from pathlib import Path
 from typing import Literal
 
 import matplotlib.pyplot as plt
 from mcp.server.fastmcp import FastMCP, Image
+from mcp.types import BlobResourceContents, EmbeddedResource
 from pydantic import BaseModel, Field
 
 from . import bom, design, ec3, loads, shapes, viz
@@ -575,6 +577,72 @@ def tune_roof(
     fig.savefig(path, dpi=80)  # dpi 80 keeps the inline image around 300 kB
     plt.close(fig)
     return [state, Image(path=path)]
+
+
+@mcp.tool(
+    name="roof_report",
+    description=(
+        "Produce a PDF report of the roof currently held by tune_roof and return "
+        "it inline: page 1 the verdict with the worst members and the "
+        "disclaimer, page 2 the four charts, page 3 the EN 1991-1-3 snow "
+        "arrangements for the shape, page 4 the material list with indicative "
+        "prices. Vector charts, so it stays sharp when printed. Use this when "
+        "the ask is 'a report', 'something to send', or 'a PDF'; use tune_roof's "
+        "own image when you just want to look at the current state. `language` "
+        "translates the prose (profile names, grades and clause numbers stay in "
+        "their EN form on purpose)."
+    ),
+)
+def roof_report(
+    language: Literal["en", "sk", "cs"] = "en",
+    prices: bool = True,
+    country: Literal["SK", "CZ"] = "SK",
+    waste_percent: float = 0.0,
+) -> list:
+    from . import i18n
+
+    roof, snow = _session_roof(_session)
+    results = roof.solve()
+    checks = roof.check(results)
+
+    before = viz.LANG
+    viz.LANG = language
+    try:
+        listing = ""
+        if prices:
+            rates = bom.Prices.load(country=country)
+            b = bom.bill_of_materials(roof, rates, waste=waste_percent / 100.0)
+            listing = bom.format_bom(b, language)
+        mu = loads.mu1(roof.profile.pitch_deg) if roof.profile else 0.0
+        CHARTS.mkdir(parents=True, exist_ok=True)
+        path = CHARTS / "roof_report.pdf"
+        shape = _session["shape"]
+        title = (f"{i18n.shape_term(shape, language)} "
+                 f"{_session['span_m']:.0f} x {_session['length_m']:.0f} m")
+        viz.report_pdf(roof, results, checks, path, title=title,
+                       material_list=listing, sk=snow / mu if mu else None)
+    finally:
+        viz.LANG = before
+
+    defl = roof.deflection(results)
+    worst = max(checks, key=lambda c: c.utilisation)
+    return [
+        {
+            "path": str(path),
+            "pages": 4 if listing else 3,
+            "ok": all(c.ok for c in checks) and defl.ok,
+            "worst_utilisation": round(float(worst.utilisation), 3),
+            "parameters": dict(_session),
+            "disclaimer": DISCLAIMER,
+        },
+        EmbeddedResource(
+            type="resource",
+            resource=BlobResourceContents(
+                uri=path.as_uri(), mimeType="application/pdf",
+                blob=base64.b64encode(path.read_bytes()).decode(),
+            ),
+        ),
+    ]
 
 
 @mcp.tool(

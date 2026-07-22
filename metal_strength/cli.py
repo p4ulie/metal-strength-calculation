@@ -37,7 +37,8 @@ def _snow_for(a, parser) -> float:
 
 def _report(roof, out: Path | None, prefix: str, show: bool = False,
             live: dict | None = None, mcp_port: int | None = 8000,
-            mcp_host: str = "127.0.0.1") -> None:
+            mcp_host: str = "127.0.0.1", pdf: Path | None = None,
+            material_list: str = "") -> None:
     """Print the verdict; optionally write PNGs and open one interactive window.
 
     ``live``, when given, is the set of roof parameters the dashboard needs to
@@ -90,6 +91,15 @@ def _report(roof, out: Path | None, prefix: str, show: bool = False,
         print("\ncharts:")
         for p in paths:
             print(f"  {p}")
+
+    if pdf:
+        sk = None
+        if roof.snow_kn_m2 and roof.profile is not None:
+            mu = loads.mu1(roof.profile.pitch_deg)
+            sk = roof.snow_kn_m2 / mu if mu else None
+        written = viz.report_pdf(roof, results, checks, pdf, title=prefix,
+                                 material_list=material_list, sk=sk)
+        print(f"\nreport: {written}")
 
     if backend:
         # One window with all four panels. For a roof it also gets live
@@ -311,6 +321,9 @@ def main(argv: list[str] | None = None) -> int:
                            help="EUR per unit of the price list currency")
         sub_p.add_argument("--waste", type=float, default=0.0,
                            help="off-cut allowance in percent")
+        sub_p.add_argument("--pdf", type=Path,
+                           help="write a report PDF: verdict, charts, snow cases, "
+                                "material list")
 
     sub.add_parser("serve", help="MCP over stdio, no window -- for an MCP client "
                                  "that launches this process itself")
@@ -361,6 +374,15 @@ def main(argv: list[str] | None = None) -> int:
                 print("  " + "  ".join(f"{n:<16s}" for n in names[i : i + 6]))
         return 0
 
+    def _bom_text(construction) -> str:
+        """The material list as text, for the PDF. Priced only if asked for."""
+        if not (a.bom or a.cost or a.prices):
+            return ""
+        prices = (bom_mod.Prices.load(a.prices, country=a.country, fx=a.fx)
+                  if (a.cost or a.prices) else None)
+        b = bom_mod.bill_of_materials(construction, prices, waste=a.waste / 100.0)
+        return bom_mod.format_bom(b, a.lang)
+
     if a.cmd == "beam":
         roof_obj = single_beam(a.span, a.section, a.grade, a.udl, a.point,
                                a.fixity, a.restrained)
@@ -369,7 +391,8 @@ def main(argv: list[str] | None = None) -> int:
               + (f", point {a.point} kN" if a.point else "")
               + (", laterally restrained" if a.restrained else ""))
         roof_obj._lang = a.lang
-        _report(roof_obj, a.out, "beam", a.show)
+        _report(roof_obj, a.out, "beam", a.show, pdf=a.pdf,
+                material_list=_bom_text(roof_obj))
         if a.bom or a.cost:
             _materials(roof_obj, a)
         return 0
@@ -395,10 +418,11 @@ def main(argv: list[str] | None = None) -> int:
             return 1
         if a.bom or a.cost or a.prices:
             _materials(proposal.construction, a)
-        if a.out or a.show:
+        if a.out or a.show or a.pdf:
             proposal.construction._lang = a.lang
             _report(proposal.construction, a.out, "design", a.show,
                     mcp_port=None if a.no_mcp else a.port, mcp_host=a.host,
+                    pdf=a.pdf, material_list=_bom_text(proposal.construction),
                     live=dict(
                 span=a.span, length=a.length, pitch_deg=a.pitch,
                 eaves_height=a.eaves_height, frame_spacing=a.frame_spacing,
@@ -423,7 +447,8 @@ def main(argv: list[str] | None = None) -> int:
     )
     roof_obj._lang = a.lang
     _report(roof_obj, a.out, "roof", a.show,
-            mcp_port=None if a.no_mcp else a.port, mcp_host=a.host, live=dict(
+            mcp_port=None if a.no_mcp else a.port, mcp_host=a.host,
+            pdf=a.pdf, material_list=_bom_text(roof_obj), live=dict(
         span=a.span, length=a.length, pitch_deg=a.pitch, eaves_height=a.eaves_height,
         frame_spacing=a.frame_spacing, purlin_spacing=a.purlin_spacing,
         rafter=a.rafter, column=a.column, purlin=a.purlin, grade=a.grade,

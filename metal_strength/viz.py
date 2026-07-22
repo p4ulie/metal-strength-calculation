@@ -362,6 +362,115 @@ def panel(roof: Roof, results: frame3d.Results, checks: list[ec3.MemberResult],
     return fig
 
 
+def _text_page(fig, lines: list[tuple[str, float, str]]) -> None:
+    """Lay out (text, size, style) rows down an otherwise empty page.
+
+    ``style`` is "normal", "bold", or "mono" for anything that is a table and
+    has to keep its columns.
+    """
+    y = 0.94
+    for text, size, style in lines:
+        fig.text(0.06, y, text, fontsize=size, va="top",
+                 weight="bold" if style == "bold" else "normal",
+                 family="monospace" if style == "mono" else "sans-serif")
+        y -= 0.022 * (size / 9.0) * (text.count("\n") + 1) + 0.012
+
+
+def report_pdf(roof: Roof, results: frame3d.Results, checks: list[ec3.MemberResult],
+               path: str | Path, title: str = "", material_list: str = "",
+               sk: float | None = None) -> Path:
+    """A multi-page PDF: summary, the four panels, snow cases, material list.
+
+    Vector output through matplotlib's own PDF backend -- no new dependency, and
+    the charts stay sharp at any zoom.
+    """
+    from matplotlib.backends.backend_pdf import PdfPages
+
+    from . import loads
+
+    defl = roof.deflection(results)
+    ranked = sorted(checks, key=lambda c: -c.utilisation)
+    worst = ranked[0]
+    ok = all(c.ok for c in checks) and defl.ok
+    fr = roof.profile
+
+    p = _out(path)
+    with PdfPages(p) as pdf:
+        # -- page 1: the verdict, and what it was a verdict on ----------------
+        fig = plt.figure(figsize=(8.27, 11.69))  # A4 portrait
+        rows = [
+            (title or "metal-strength", 20, "bold"),
+            (f"{_L('utilisation')}: {worst.utilisation:.2f}   "
+             f"{_L('deflection')}: {defl.utilisation:.2f}", 12, "normal"),
+            (f"=> {i18n.verdict(ok, LANG)}", 22, "bold"),
+            ("", 9, "normal"),
+        ]
+        params = [
+            f"{_L('shape')}: {i18n.shape_term(fr.shape, LANG) if fr else '-'}",
+            f"span x length: {roof.span:.1f} x {roof.length:.1f} m",
+            f"{_L('snow')}: {roof.snow_kn_m2:.2f} kN/m2   case: "
+            f"{i18n.snow_term(roof.snow_case, LANG)}",
+            f"{_L('members')}: {len(checks)}   {roof.total_mass_kg:,.0f} kg",
+        ]
+        rows.append(("\n".join(params), 10, "mono"))
+        rows.append((f"{_L('worst_members')}:", 12, "bold"))
+        table = [f"{'':2s}{i18n.t('utilisation', LANG):>12s}  "
+                 f"{'member':<26s}{i18n.t('governing', LANG)}"]
+        table += [f"{'OK' if c.ok else '!!':2s}{c.utilisation:12.2f}  "
+                  f"{i18n.member_label(c.section, LANG):<26s}{c.governing.name}"
+                  for c in ranked[:12]]
+        rows.append(("\n".join(table), 8, "mono"))
+        rows.append((f"{'OK' if defl.ok else '!!':2s}{defl.utilisation:12.2f}  "
+                     f"{defl.name:<26s}{defl.demand:.1f} / {defl.capacity:.1f} mm",
+                     8, "mono"))
+        if fr is not None and fr.mu_is_approximate:
+            rows.append((_L("mu_approximate"), 8, "bold"))
+        _text_page(fig, rows)
+        fig.text(0.06, 0.05, i18n.t("disclaimer", LANG), fontsize=8, wrap=True,
+                 va="bottom", color="#555555")
+        pdf.savefig(fig)
+        _finish(fig)
+
+        # -- page 2: the charts -----------------------------------------------
+        panels = panel(roof, results, checks, title=title)
+        panels.set_size_inches(11.69, 8.27)  # A4 landscape
+        pdf.savefig(panels)
+        _finish(panels)
+
+        # -- page 3: the snow arrangements this shape allows -------------------
+        if fr is not None and sk is not None:
+            fig = plt.figure(figsize=(11.69, 8.27))
+            cases = loads.snow_arrangements(fr, sk)
+            axes = fig.subplots(1, len(cases), sharey=True, squeeze=False)[0]
+            peak = max((c.governing for c in cases), default=1.0) or 1.0
+            xs = [x for x, _ in fr.points]
+            zs = [z for _, z in fr.points]
+            for ax, case in zip(axes, cases):
+                ax.plot(xs, zs, color="#37474f", lw=2)
+                for seg, value in zip(fr.rafters, case.values):
+                    h = 0.25 * (max(zs) - min(zs) + 1.0) * value / peak
+                    ax.fill_between([seg.x0, seg.x1], [seg.z0, seg.z1],
+                                    [seg.z0 + h, seg.z1 + h],
+                                    color="#90caf9", edgecolor="#1565c0")
+                ax.set_title(i18n.snow_term(case.name, LANG), fontsize=10)
+                ax.set_xticks([])
+            axes[0].set_ylabel("m")
+            fig.suptitle(f"{_L('snow_arrangements')} -- sk={sk:.2f} kN/m2")
+            pdf.savefig(fig)
+            _finish(fig)
+
+        # -- page 4: what to order --------------------------------------------
+        if material_list:
+            fig = plt.figure(figsize=(11.69, 8.27))
+            _text_page(fig, [(i18n.t("material_list", LANG), 14, "bold"),
+                             (material_list, 8, "mono")])
+            pdf.savefig(fig)
+            _finish(fig)
+
+        pdf.infodict()["Title"] = title or "metal-strength report"
+    return p
+
+
 # --- the live dashboard -----------------------------------------------------
 
 

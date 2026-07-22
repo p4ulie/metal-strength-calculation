@@ -377,3 +377,41 @@ def test_dashboard_keeps_the_snow_case_the_cli_asked_for():
         assert session["case"] == "balanced"
     finally:
         plt.close(fig)
+
+
+def _pdf_pages(path) -> int:
+    """Page count straight out of the PDF catalogue, no reader library."""
+    import re
+
+    found = re.findall(rb"/Count (\d+)", path.read_bytes())
+    return int(found[0]) if found else 0
+
+
+def test_report_pdf_has_every_page(tmp_path):
+    from metal_strength.model import roof
+
+    con = roof(span=12, length=20, pitch_deg=20, rafter="IPE450", column="HEB240",
+               purlin="SHS140x140x5", snow_kn_m2=3.2)
+    results = con.solve()
+    checks = con.check(results)
+
+    bare = viz.report_pdf(con, results, checks, tmp_path / "bare.pdf")
+    full = viz.report_pdf(con, results, checks, tmp_path / "full.pdf",
+                          title="a roof", material_list="rafter IPE450 40x",
+                          sk=4.0)
+    assert bare.read_bytes().startswith(b"%PDF-")
+    assert _pdf_pages(bare) == 2  # summary + charts
+    assert _pdf_pages(full) == 4  # + snow cases + material list
+    assert full.stat().st_size > bare.stat().st_size
+
+
+def test_report_pdf_leaves_no_figures_open(tmp_path):
+    import matplotlib.pyplot as plt
+
+    from metal_strength.model import roof
+
+    plt.close("all")
+    con = roof(span=12, length=20, pitch_deg=20, snow_kn_m2=2.0)
+    results = con.solve()
+    viz.report_pdf(con, results, con.check(results), tmp_path / "r.pdf", sk=2.5)
+    assert plt.get_fignums() == []

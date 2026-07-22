@@ -14,7 +14,7 @@ EXPECTED_TOOLS = {
     "snow_load_from_depth", "snow_load_eurocode", "list_sections",
     "section_properties", "check_beam", "check_rod_buckling", "check_roof",
     "solve_frame", "render_snow_cases", "propose_construction", "material_list",
-    "list_shapes", "tune_roof",
+    "list_shapes", "tune_roof", "roof_report",
 }
 
 
@@ -370,3 +370,33 @@ def test_a_drawn_profile_reaches_an_open_window():
     finally:
         srv.attach_window(None)
         plt.close(fig)
+
+
+def test_roof_report_returns_a_pdf_inline():
+    import base64
+
+    srv.tune_roof(reset=True, shape="multispan", span_m=24.0, chart=False)
+    state, resource = srv.roof_report(language="sk")
+
+    assert state["pages"] == 4
+    assert state["parameters"]["shape"] == "multispan"
+    assert resource.resource.mimeType == "application/pdf"
+
+    pdf = base64.b64decode(resource.resource.blob)
+    assert pdf.startswith(b"%PDF-"), "a client must get the bytes, not just a path"
+    assert b"/Count 4" in pdf
+    assert len(pdf) > 20_000
+
+    # Without prices there is no material list, so one page fewer.
+    state, _ = srv.roof_report(prices=False)
+    assert state["pages"] == 3
+
+
+def test_report_language_does_not_leak_into_later_charts():
+    """viz.LANG is a module global; the report must put it back."""
+    from metal_strength import viz
+
+    before = viz.LANG
+    srv.tune_roof(reset=True, chart=False)
+    srv.roof_report(language="cs", prices=False)
+    assert viz.LANG == before

@@ -237,7 +237,7 @@ uv run python tests/smoke_mcp.py                  # exercise every tool
 
 Tools: `snow_load_from_depth`, `snow_load_eurocode`, `list_sections`,
 `list_shapes`, `section_properties`, `check_beam`, `check_rod_buckling`,
-`check_roof`, `tune_roof`, `solve_frame`, `propose_construction`,
+`check_roof`, `tune_roof`, `roof_report`, `solve_frame`, `propose_construction`,
 `material_list`, `render_snow_cases`.
 
 ### One process, not two
@@ -281,6 +281,22 @@ Everything omitted keeps its value, `changed` in the reply says what actually
 moved, and `snow_cases_available` tells you which arrangements the current
 shape allows. Naming a depth after a direct `snow_kn_m2` switches back to the
 depth. One session per process — right for one person driving it, not for two.
+
+### A report to send
+
+`--pdf FILE` on `beam`, `roof` or `design` writes a four-page report; over MCP
+the same thing is `roof_report`, which returns the PDF **inline** as a resource
+blob rather than a path, so a client on another machine gets the bytes:
+
+| page | contents |
+|---|---|
+| 1 | verdict, parameters, the twelve worst members, deflection, disclaimer |
+| 2 | the four charts — 3D utilisation, ranking, deflected shape, force diagrams |
+| 3 | the EN 1991-1-3 snow arrangements for that shape |
+| 4 | material list with indicative prices (omitted if you did not ask for costs) |
+
+Charts are vector, so it prints sharp. `--lang` / `language=` translates the
+prose. Written by matplotlib's own PDF backend — no extra dependency.
 
 ### Shapes in words
 
