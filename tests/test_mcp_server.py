@@ -400,3 +400,34 @@ def test_report_language_does_not_leak_into_later_charts():
     srv.tune_roof(reset=True, chart=False)
     srv.roof_report(language="cs", prices=False)
     assert viz.LANG == before
+
+
+@pytest.mark.parametrize("host", ["127.0.0.1", "localhost", "::1"])
+def test_loopback_keeps_the_dns_rebinding_guard(host, capsys):
+    from metal_strength import cli
+    from metal_strength import mcp_server as server
+
+    before = server.mcp.settings.transport_security
+    try:
+        cli._allow_remote_hosts(server, host)
+        assert server.mcp.settings.transport_security is before
+        assert capsys.readouterr().err == ""
+    finally:
+        server.mcp.settings.transport_security = before
+
+
+def test_binding_wide_open_is_allowed_and_says_so(capsys):
+    """0.0.0.0 answers a non-localhost Host header -- and warns it is unauthenticated."""
+    from metal_strength import cli
+    from metal_strength import mcp_server as server
+
+    before = server.mcp.settings.transport_security
+    try:
+        cli._allow_remote_hosts(server, "0.0.0.0")
+        assert (server.mcp.settings.transport_security
+                .enable_dns_rebinding_protection is False)
+        warning = capsys.readouterr().err
+        assert "every interface" in warning
+        assert "no authentication" in warning
+    finally:
+        server.mcp.settings.transport_security = before

@@ -187,9 +187,31 @@ def _serve_dashboard(fig, host: str, port: int) -> str:
 
     port = _free_port(port, host)
     srv.mcp.settings.host, srv.mcp.settings.port = host, port
+    _allow_remote_hosts(srv, host)
     threading.Thread(target=lambda: srv.mcp.run(transport="streamable-http"),
                      daemon=True).start()
     return f"http://{host}:{port}/mcp"
+
+
+# Loopback is the safe default and MCP enforces it: its DNS-rebinding guard
+# answers 421 to any Host header that is not localhost. Binding elsewhere is a
+# deliberate act, so widen the guard to match -- and say what that means.
+_LOOPBACK = ("127.0.0.1", "localhost", "::1", "[::1]")
+
+
+def _allow_remote_hosts(srv, host: str) -> None:
+    """Let a non-loopback bind actually answer, and warn that it is open."""
+    if host in _LOOPBACK:
+        return
+    from mcp.server.transport_security import TransportSecuritySettings
+
+    srv.mcp.settings.transport_security = TransportSecuritySettings(
+        enable_dns_rebinding_protection=False)
+    where = "every interface" if host == "0.0.0.0" else host  # noqa: S104
+    print(f"! serving on {where} with no authentication: anyone who can reach "
+          f"this port can drive the model and read the reports it writes. "
+          f"Bind to 127.0.0.1, or to one trusted interface, unless you meant "
+          f"this.", file=sys.stderr)
 
 
 def _serve(a) -> int:

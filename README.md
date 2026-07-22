@@ -252,6 +252,14 @@ the window without serving it.
 `serve` is the other case only: stdio, no window, for an MCP client that
 launches this process itself.
 
+**Reaching it from another machine.** `--host 0.0.0.0` binds every interface,
+`--host 10.0.0.5` one of them. Loopback is the default for a reason: there is
+**no authentication**, so anyone who can reach the port can drive the model and
+read the reports it writes. A non-loopback bind also switches off MCP's
+DNS-rebinding guard — without that it answers `421 Misdirected Request` to any
+`Host` header that is not localhost — and prints a warning saying so. Prefer one
+trusted interface, or a VPN or SSH tunnel, over `0.0.0.0`.
+
 That works because there is one parameter dict, not two kept in step: the
 window reads and writes the MCP server's session directly, so no redraw can
 read a stale value off an untouched widget and silently revert a tool's change.
